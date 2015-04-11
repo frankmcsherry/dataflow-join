@@ -51,9 +51,9 @@ pub trait PrefixExtender<Prefix: Data+Columnar, Extension: Data+Columnar> : 'sta
     type RoutingFunction: Fn(&Prefix)->u64+'static;
     fn route(&self) -> Self::RoutingFunction;
     // these are the parts required for the join algorithm
-    fn count(&self, (Prefix, u64, u64), u64) -> (Prefix, u64, u64);
-    fn propose(&self, Prefix) -> (Prefix, Vec<Extension>);
-    fn intersect(&self, (Prefix, Vec<Extension>)) -> (Prefix, Vec<Extension>);
+    fn count(&self, &Prefix) -> u64;
+    fn propose(&self, &Prefix) -> Vec<Extension>;
+    fn intersect(&self, &Prefix, &mut Vec<Extension>);
 }
 
 impl<G, P, E, PE> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>>
@@ -69,9 +69,17 @@ where G: Graph,
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
                 let mut session = handle.output.session(&time);
-                for datum in data {
-                    let result = extender.count(datum, ident);
-                    session.push(&result);
+                for (prefix, old_count, old_index) in data {
+                    let new_count = extender.count(&prefix);
+                    let result = if new_count < old_count {
+                        (prefix, new_count, ident)
+                    }
+                    else {
+                        (prefix, old_count, old_index)
+                    };
+                    if result.1 > 0 {
+                        session.push(&result);
+                    }
                 }
             }
         })
@@ -85,10 +93,10 @@ where G: Graph,
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
                 let mut session = handle.output.session(&time);
-                for datum in data {
-                    let result = extender.propose(datum);
-                    if result.1.len() > 0 {
-                        session.push(&result);
+                for prefix in data {
+                    let extensions = extender.propose(&prefix);
+                    if extensions.len() > 0 {
+                        session.push(&(prefix, extensions));
                     }
                 }
             }
@@ -102,9 +110,9 @@ where G: Graph,
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
                 let mut session = handle.output.session(&time);
-                for datum in data {
-                    let result = extender.intersect(datum);
-                    session.push(&result);
+                for (prefix, mut extensions) in data {
+                    extender.intersect(&prefix, &mut extensions);
+                    session.push(&(prefix, extensions));
                 }
             }
         })
@@ -128,7 +136,8 @@ impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Str
         // improve the counts using each extender
         let mut counts = self.select(|p| (p, 1 << 31, 1 << 31));
         for index in (0..extenders.len()) {
-            counts = extenders[index].count(&mut counts, index as u64);
+            counts = extenders[index].count(&mut counts, index as u64)
+                                     .filter(|x| x.1 > 0);
         }
 
         // for each extender, propose and intersect
@@ -137,7 +146,7 @@ impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Str
             let mut nominations = counts.filter(move |p| p.2 == index as u64)
                                         .select(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(&mut nominations);
-            for other in (0..extenders.len()) {
+            for other in (0..extenders.len()).filter(|&x| x != index) {
                 if index != other {
                     extensions = extenders[other].intersect(&mut extensions);
                 }

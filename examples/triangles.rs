@@ -64,30 +64,28 @@ impl<E: Data+Columnar+Ord, P:Data+Columnar, L: Fn(&P)->u64+'static, F:Fn()->L+'s
     type RoutingFunction = L;
     fn route(&self) -> L { (self.logic_generator)() }
 
-    fn count(&self, (prefix, p_count, p_index): (P, u64, u64), id: u64) -> (P, u64, u64) {
-        let node = (self.logic)(&prefix) as usize;
+    fn count(&self, prefix: &P) -> u64 {
+        let node = (self.logic)(prefix) as usize;
         let graph = self.graph.borrow();
-        let count = graph.edges(node).len() as u64;
-        if count < p_count { (prefix, count, id) }
-        else               { (prefix, p_count, p_index) }
+        graph.edges(node).len() as u64
+        // if count < p_count { (prefix, count, id) }
+        // else               { (prefix, p_count, p_index) }
     }
 
-    fn propose(&self, prefix: P) -> (P, Vec<E>) {
-        let node = (self.logic)(&prefix) as usize;
+    fn propose(&self, prefix: &P) -> Vec<E> {
+        let node = (self.logic)(prefix) as usize;
         let graph = self.graph.borrow();
-        (prefix, graph.edges(node).to_vec())
+        graph.edges(node).to_vec()
     }
 
-    fn intersect(&self, (prefix, mut list): (P, Vec<E>)) -> (P, Vec<E>) {
-        let node = (self.logic)(&prefix) as usize;
+    fn intersect(&self, prefix: &P, list: &mut Vec<E>) {
+        let node = (self.logic)(prefix) as usize;
         let graph = self.graph.borrow();
         let mut slice = graph.edges(node);
         list.retain(move |value| {
             slice = gallop(slice, value);
             slice.len() > 0 && &slice[0] == value
         });
-
-        (prefix, list)
     }
 }
 
@@ -119,7 +117,7 @@ pub fn gallop<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
 fn main () {
     println!("using a bogus graph for now; check out the source to point it at real data");
     let graph = GraphFragment { nodes: vec![0, 4, 7, 9, 10, 10], edges: vec![1, 2, 3, 4, 2, 3, 4, 3, 4, 4] };
-    // let graph = livejournal(format!("path/to/soc-LiveJournal1.txt"), 100000000);
+    // let graph = livejournal(format!("/path/to/soc-LiveJournal1.txt"));
     let graph = Rc::new(RefCell::new(graph));
 
     triangles(ThreadCommunicator, |_index, _peers| graph.clone());
@@ -135,8 +133,8 @@ fn triangles<C: Communicator, F: Fn(u64, u64)->Rc<RefCell<GraphFragment<u32>>>>(
                               .generic_join_layer(vec![Box::new(fragment.extend_using(|| { |&(a,_)| a as u64 })),
                                                        Box::new(fragment.extend_using(|| { |&(_,b)| b as u64 }))]).flatten();
 
-    triangles.observe(|&((a,b), c)| println!("triangle: ({:?}, {:?}, {:?})", a, b, c));
-
+   //  triangles.observe(|&((a,b), c)| println!("triangle: ({:?}, {:?}, {:?})", a, b, c));
+   //
    //  let mut quads = triangles.generic_join_layer(vec![Box::new(fragment.extend_using(|| { |&((a,_),_)| a as u64 })),
    //                                                    Box::new(fragment.extend_using(|| { |&((_,b),_)| b as u64 })),
    //                                                    Box::new(fragment.extend_using(|| { |&((_,_),c)| c as u64 }))]).flatten();
@@ -146,11 +144,13 @@ fn triangles<C: Communicator, F: Fn(u64, u64)->Rc<RefCell<GraphFragment<u32>>>>(
    //                                                Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
    //                                                Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
    //
-   // let mut sixes = next.generic_join_layer(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
-   //                                              Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
-   //                                              Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
-   //                                              Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
-   //                                              Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
+   // let mut sixes = fives.generic_join_layer(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
+   //                                               Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
+   //                                               Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
+   //                                               Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
+   //                                               Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
+   //
+   // sixes.observe(|&x| println!("observed: {:?}", x));
 
     graph.0.borrow_mut().get_internal_summary();
     graph.0.borrow_mut().set_external_summary(Vec::new(), &mut Vec::new());
@@ -188,7 +188,7 @@ fn redirect(edges: &mut Vec<(u32, u32)>) {
 }
 
 // loads the livejournal file available at https://snap.stanford.edu/data/soc-LiveJournal1.html
-fn livejournal(filename: String, limit: u64) -> GraphFragment<u32> {
+fn livejournal(filename: String) -> GraphFragment<u32> {
     let mut temp = Vec::new();
     let file = BufReader::new(File::open(filename).unwrap());
     for readline in file.lines() {
@@ -200,9 +200,6 @@ fn livejournal(filename: String, limit: u64) -> GraphFragment<u32> {
 
             if src < dst { temp.push((src, dst)) }
             if src > dst { temp.push((dst, src)) }
-            if temp.len() >= limit as usize {
-                break;
-            }
         }
     }
 
@@ -214,9 +211,12 @@ fn livejournal(filename: String, limit: u64) -> GraphFragment<u32> {
     temp.dedup();
     println!("graph data uniqed; {:?} edges", temp.len());
 
-    redirect(&mut temp);
-    temp.sort();
-    println!("graph data dirctd; {:?} edges", temp.len());
+    // speeds things up a bit by tweaking edge directions.
+    // loses the src < dst property, which can be helpful.
+
+    // redirect(&mut temp);
+    // temp.sort();
+    // println!("graph data dirctd; {:?} edges", temp.len());
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
