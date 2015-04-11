@@ -1,0 +1,12 @@
+[package]
+
+name = "dataflow_join"
+version = "0.0.1"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies.timely]
+git="https://github.com/frankmcsherry/timely-dataflow"
+
+[dependencies]
+columnar="0.0.14"
+time = "0.1.24"
