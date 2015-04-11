@@ -117,8 +117,9 @@ pub fn gallop<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
 }
 
 fn main () {
-    // let graph = GraphFragment { nodes: vec![0, 4, 7, 9, 10, 10], edges: vec![1, 2, 3, 4, 2, 3, 4, 3, 4, 4] };
-    let graph = livejournal(format!("/Users/mcsherry/Projects/Datasets/soc-LiveJournal1.txt"), 100000000);
+    println!("using a bogus graph for now; check out the source to point it at real data");
+    let graph = GraphFragment { nodes: vec![0, 4, 7, 9, 10, 10], edges: vec![1, 2, 3, 4, 2, 3, 4, 3, 4, 4] };
+    // let graph = livejournal(format!("path/to/soc-LiveJournal1.txt"), 100000000);
     let graph = Rc::new(RefCell::new(graph));
 
     triangles(ThreadCommunicator, |_index, _peers| graph.clone());
