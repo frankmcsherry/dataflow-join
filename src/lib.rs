@@ -5,6 +5,7 @@ extern crate columnar;
 extern crate timely;
 extern crate core;
 extern crate time;
+extern crate mmap;
 
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -21,6 +22,8 @@ use timely::communication::{Data, Pullable};
 
 use columnar::Columnar;
 
+mod typedrw;
+pub use typedrw::TypedMemoryMap;
 // Algorithm 3 is an implementation of an instance of GenericJoin, a worst-case optimal join algorithm.
 
 // The algorithm orders the attributes of the resulting relation, and for each prefix of these attributes
@@ -46,7 +49,7 @@ use columnar::Columnar;
 // The important part of this algorithm is that step d.i should take roughly constant time.
 
 
-pub trait PrefixExtender<Prefix: Data+Columnar, Extension: Data+Columnar> : 'static {
+pub trait PrefixExtender<Prefix, Extension> {
     // these are needed to tell timely dataflow how to route prefixes
     type RoutingFunction: Fn(&Prefix)->u64+'static;
     fn route(&self) -> Self::RoutingFunction;
@@ -60,7 +63,7 @@ impl<G, P, E, PE> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>>
 where G: Graph,
       P: Data+Columnar,
       E: Data+Columnar,
-      PE: PrefixExtender<P, E> {
+      PE: PrefixExtender<P, E>+'static {
     fn count(&self, stream: &mut Stream<G, (P, u64, u64)>, ident: u64) -> Stream<G, (P, u64, u64)> {
         let func = self.borrow().route();
         let clone = self.clone();
@@ -71,14 +74,14 @@ where G: Graph,
                 let mut session = handle.output.session(&time);
                 for (prefix, old_count, old_index) in data {
                     let new_count = extender.count(&prefix);
-                    let result = if new_count < old_count {
-                        (prefix, new_count, ident)
+                    let (count, index) = if new_count < old_count {
+                        (new_count, ident)
                     }
                     else {
-                        (prefix, old_count, old_index)
+                        (old_count, old_index)
                     };
-                    if result.1 > 0 {
-                        session.push(&result);
+                    if count > 0 {
+                        session.push(&(prefix, count, index));
                     }
                 }
             }
@@ -126,12 +129,12 @@ pub trait StreamPrefixExtender<G: Graph, Prefix: Data+Columnar, Extension: Data+
 }
 
 pub trait GenericJoinExt<G, P:Data+Columnar, E:Data+Columnar> {
-    fn generic_join_layer(&mut self, extenders: Vec<Box<StreamPrefixExtender<G, P, E>>>) -> Stream<G, (P, Vec<E>)>;
+    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
 impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Stream<G, P> {
-    fn generic_join_layer(&mut self, extenders: Vec<Box<StreamPrefixExtender<G, P, E>>>) -> Stream<G, (P, Vec<E>)> {
+    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)> {
 
         // improve the counts using each extender
         let mut counts = self.select(|p| (p, 1 << 31, 1 << 31));
@@ -178,25 +181,6 @@ impl<G: Graph, P: Data+Columnar, E: Data+Columnar> FlattenExt<G, P, E> for Strea
                     for extension in extensions {
                         session.push(&(prefix.clone(), extension));
                     }
-                }
-            }
-        })
-    }
-}
-
-// TODO : This should probably be in core timely dataflow
-pub trait ObserveExt<G: Graph, D: Data+Columnar> {
-    fn observe<F: Fn(&D)+'static>(&mut self, logic: F) -> Self;
-}
-
-impl<G: Graph, D: Data+Columnar> ObserveExt<G, D> for Stream<G, D> {
-    fn observe<F: Fn(&D)+'static>(&mut self, logic: F) -> Stream<G, D> {
-        self.unary(Pipeline, format!("Observe"), move |handle| {
-            while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                for datum in data {
-                    logic(&datum);
-                    session.push(&datum);
                 }
             }
         })
