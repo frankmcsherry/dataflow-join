@@ -16,15 +16,16 @@ use std::fs::File;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::thread;
-use core::marker::PhantomData;
 use core::raw::Slice as RawSlice;
 
-use dataflow_join::{PrefixExtender, GenericJoinExt, FlattenExt, TypedMemoryMap};
+use dataflow_join::{GenericJoinExt, FlattenExt};
+use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt, gallop};
+// use dataflow_join::{PrefixExtender, GenericJoinExt, FlattenExt, TypedMemoryMap};
 
 use timely::progress::scope::Scope;
 use timely::progress::subgraph::new_graph;
 use timely::example::input::InputExtensionTrait;
-use timely::communication::{Data, Communicator, ThreadCommunicator, ProcessCommunicator};
+use timely::communication::{Data, Communicator, ProcessCommunicator};
 
 use timely::progress::Graph;
 use timely::example::stream::Stream;
@@ -56,10 +57,10 @@ fn main () {
         }
     }
     if args.get_bool("digest") {
-        let source = args.get_str("<source>");
-        let target = args.get_str("<target>");
         println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
         println!("at least, it will once you edit the code to uncomment the line.")
+        // let source = args.get_str("<source>");
+        // let target = args.get_str("<target>");
         // digest_livejournal(&source, &target); // will overwrite "prefix.offsets" and "prefix.targets"
     }
     if args.get_bool("help") {
@@ -69,80 +70,6 @@ fn main () {
         println!("stash that somewhere, and use it as text source for compute or digest.");
         println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
         println!("at least, it will once you edit the code to uncomment the line.")
-    }
-}
-
-trait GraphExtenderExt<G: GraphTrait> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<RefCell<GraphExtender<G,P,L,F>>>
-        where L: Fn(&P)->u64+'static, F: Fn()->L+'static;
-}
-
-impl<G: GraphTrait> GraphExtenderExt<G> for Rc<RefCell<G>> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<RefCell<GraphExtender<G,P,L,F>>>
-        where L: Fn(&P)->u64+'static, F: Fn()->L+'static {
-        let logic = route();
-        Rc::new(RefCell::new(GraphExtender {
-            graph:  self.clone(),
-            logic:  logic,
-            route:  route,
-            phant:  PhantomData,
-        }))
-    }
-}
-
-pub trait GraphTrait : 'static {
-    type Target: Ord;
-    fn nodes(&self) -> usize;
-    fn edges(&self, node: usize) -> &[Self::Target];
-}
-
-pub struct GraphVector<E> {
-    nodes: Vec<u64>,
-    edges: Vec<E>,
-}
-
-impl<E: Ord+Send+'static> GraphTrait for GraphVector<E> {
-    type Target = E;
-    fn nodes(&self) -> usize {
-        self.nodes.len()
-    }
-    fn edges(&self, node: usize) -> &[E] {
-        if node + 1 < self.nodes.len() {
-            let start = self.nodes[node] as usize;
-            let limit = self.nodes[node+1] as usize;
-            &self.edges[start..limit]
-        }
-        else { &[] }
-    }
-}
-
-pub struct GraphMMap<E: Ord+Copy> {
-    nodes: TypedMemoryMap<u64>,
-    edges: TypedMemoryMap<E>,
-}
-
-impl<E: Ord+Copy> GraphMMap<E> {
-    fn new(prefix: &str) -> GraphMMap<E> {
-        GraphMMap {
-            nodes: TypedMemoryMap::new(format!("{}.offsets", prefix)),
-            edges: TypedMemoryMap::new(format!("{}.targets", prefix)),
-        }
-    }
-}
-
-impl<E: Ord+Copy+Send+'static> GraphTrait for GraphMMap<E> {
-    type Target = E;
-    fn nodes(&self) -> usize {
-        self.nodes[..].len()
-    }
-    fn edges(&self, node: usize) -> &[E] {
-        let nodes = &self.nodes[..];
-        if node + 1 < nodes.len() {
-            let start = nodes[node] as usize;
-            let limit = nodes[node+1] as usize;
-            &self.edges[..][start..limit]
-        }
-        else { &[] }
     }
 }
 
@@ -167,66 +94,6 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: G) -> u64 {
     }
     count
 }
-
-pub struct GraphExtender<G: GraphTrait, P, L: Fn(&P)->u64, F:Fn()->L> {
-    graph: Rc<RefCell<G>>,
-    logic: L,
-    route: F,
-    phant: PhantomData<P>,
-}
-
-impl<G: GraphTrait, P, L: Fn(&P)->u64+'static, F:Fn()->L+'static> PrefixExtender<P, G::Target> for GraphExtender<G, P, L, F>
-where <G as GraphTrait>::Target : Clone
-{
-    type RoutingFunction = L;
-    fn route(&self) -> L { (self.route)() }
-
-    fn count(&self, prefix: &P) -> u64 {
-        let node = (self.logic)(prefix) as usize;
-        self.graph.borrow().edges(node).len() as u64
-    }
-
-    fn propose(&self, prefix: &P) -> Vec<G::Target> {
-        let node = (self.logic)(prefix) as usize;
-        self.graph.borrow().edges(node).to_vec()
-    }
-
-    fn intersect(&self, prefix: &P, list: &mut Vec<G::Target>) {
-        let node = (self.logic)(prefix) as usize;
-        let graph = self.graph.borrow();
-        let mut slice = graph.edges(node);
-        list.retain(move |value| {
-            slice = gallop(slice, value);
-            slice.len() > 0 && &slice[0] == value
-        });
-    }
-}
-
-// intended to advance slice to start at the first element >= value.
-pub fn gallop<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
-    // if empty slice, or already >= element, return
-    if slice.len() > 0 && &slice[0] < value {
-        let mut step = 1;
-        while step < slice.len() && &slice[step] < value {
-            slice = &slice[step..];
-            step = step << 1;
-        }
-
-        step = step >> 1;
-        while step > 0 {
-            if step < slice.len() && &slice[step] < value {
-                slice = &slice[step..];
-            }
-            step = step >> 1;
-        }
-
-        slice = &slice[1..]; // advance one, as we always stayed < value
-    }
-
-    return slice;
-}
-
-
 
 fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync>(communicators: Vec<C>, loader: F) {
     let mut guards = Vec::new();
@@ -254,7 +121,7 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
 
     // panic!("triangles: {:?}", graph.borrow().triangles());
 
-   //  triangles.observe();
+    // triangles.observe();
    //  triangles.observe(|&((a,b), c)| println!("triangle: ({:?}, {:?}, {:?})", a, b, c));
    //
    //  let mut quads = triangles.extend(vec![Box::new(fragment.extend_using(|| { |&((a,_),_)| a as u64 })),
@@ -396,7 +263,7 @@ impl<G: Graph, D: Data+Columnar> ObserveExt<G, D> for Stream<G, D> {
                 counter += data.len() as u64;
                 println!("seen: {:?} records", counter);
                 for datum in data {
-                    session.push(&datum);
+                    session.give(datum);
                 }
             }
         })

@@ -16,14 +16,18 @@ use timely::example::unary::UnaryExt;
 use timely::example::select::SelectExt;
 use timely::example::filter::FilterExt;
 use timely::example::concat::ConcatExtensionTrait;
+use timely::example::partition::PartitionExt;
 use timely::communication::exchange::{Pipeline, Exchange};
 use timely::communication::observer::ObserverSessionExt;
 use timely::communication::{Data, Pullable};
 
 use columnar::Columnar;
 
+pub mod graph;
 mod typedrw;
+
 pub use typedrw::TypedMemoryMap;
+
 // Algorithm 3 is an implementation of an instance of GenericJoin, a worst-case optimal join algorithm.
 
 // The algorithm orders the attributes of the resulting relation, and for each prefix of these attributes
@@ -81,7 +85,7 @@ where G: Graph,
                         (old_count, old_index)
                     };
                     if count > 0 {
-                        session.push(&(prefix, count, index));
+                        session.give((prefix, count, index));
                     }
                 }
             }
@@ -99,7 +103,7 @@ where G: Graph,
                 for prefix in data {
                     let extensions = extender.propose(&prefix);
                     if extensions.len() > 0 {
-                        session.push(&(prefix, extensions));
+                        session.give((prefix, extensions));
                     }
                 }
             }
@@ -115,7 +119,7 @@ where G: Graph,
                 let mut session = handle.output.session(&time);
                 for (prefix, mut extensions) in data {
                     extender.intersect(&prefix, &mut extensions);
-                    session.push(&(prefix, extensions));
+                    session.give((prefix, extensions));
                 }
             }
         })
@@ -137,22 +141,19 @@ impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Str
     fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)> {
 
         // improve the counts using each extender
-        let mut counts = self.select(|p| (p, 1 << 31, 1 << 31));
+        let mut counts = self.select(|p| (p, 1 << 31, 0));
         for index in (0..extenders.len()) {
             counts = extenders[index].count(&mut counts, index as u64)
                                      .filter(|x| x.1 > 0);
         }
 
-        // for each extender, propose and intersect
         let mut results = Vec::new();
+        let mut parts = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
         for index in (0..extenders.len()) {
-            let mut nominations = counts.filter(move |p| p.2 == index as u64)
-                                        .select(|(x, _, _)| x);
+            let mut nominations = parts[index].select(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(&mut nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
-                if index != other {
-                    extensions = extenders[other].intersect(&mut extensions);
-                }
+                extensions = extenders[other].intersect(&mut extensions);
             }
             results.push(extensions);
         }
@@ -179,7 +180,7 @@ impl<G: Graph, P: Data+Columnar, E: Data+Columnar> FlattenExt<G, P, E> for Strea
                 let mut session = handle.output.session(&time);
                 for (prefix, extensions) in data {
                     for extension in extensions {
-                        session.push(&(prefix.clone(), extension));
+                        session.give((prefix.clone(), extension));
                     }
                 }
             }
