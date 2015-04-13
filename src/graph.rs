@@ -65,11 +65,11 @@ impl<E: Ord+Copy> GraphMMap<E> {
 
 impl<E: Ord+Copy+Send+'static> GraphTrait for GraphMMap<E> {
     type Target = E;
-    #[inline]
+    #[inline(always)]
     fn nodes(&self) -> usize {
         self.nodes[..].len()
     }
-    #[inline]
+    #[inline(always)]
     fn edges(&self, node: usize) -> &[E] {
         let nodes = &self.nodes[..];
         if node + 1 < nodes.len() {

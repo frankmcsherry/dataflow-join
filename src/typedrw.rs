@@ -29,7 +29,7 @@ impl<T:Copy> ops::Index<ops::RangeFull> for TypedMemoryMap<T> {
     type Output = [T];
     #[inline]
     fn index(&self, _index: ops::RangeFull) -> &[T] {
-        assert!(self.len <= self.map.len());
+        // assert!(self.len <= self.map.len());
         unsafe { mem::transmute(RawSlice {
             data: self.map.data() as *const u8,
             len: self.len / mem::size_of::<T>(),

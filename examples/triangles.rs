@@ -36,7 +36,8 @@ use timely::communication::Pullable;
 use columnar::Columnar;
 
 static USAGE: &'static str = "
-Usage: triangles compute (text | binary) <source>
+Usage: triangles dataflow (text | binary) <source> <workers>
+       triangles compute (text | binary) <source>
        triangles digest <source> <target>
        triangles help
 ";
@@ -44,8 +45,10 @@ Usage: triangles compute (text | binary) <source>
 fn main () {
     let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
 
-    if args.get_bool("compute") {
-        let workers = 4;
+    if args.get_bool("dataflow") {
+        let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
+                      else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
+        println!("starting triangles dataflow with {:?} workers", workers);
         let source = args.get_str("<source>");
         if args.get_bool("text") {
             let mut graph = livejournal(&source);
@@ -53,15 +56,30 @@ fn main () {
             triangles_multi(ProcessCommunicator::new_vector(workers), |index, peers| extract_fragment(&graph, index, peers));
         }
         if args.get_bool("binary") {
-            triangles_multi(ProcessCommunicator::new_vector(workers), |index, peers| GraphMMap::new(&source));
+            triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source));
+        }
+    }
+    if args.get_bool("compute") {
+        let source = args.get_str("<source>");
+        if args.get_bool("text") {
+            let mut graph = livejournal(&source);
+            organize_graph(&mut graph);
+            let graph = extract_fragment(&graph, 0, 1);
+            println!("triangles: {:?}", raw_triangles(&graph));
+        }
+        if args.get_bool("binary") {
+            let graph = GraphMMap::new(&source);
+            println!("triangles: {:?}", raw_triangles(&graph));
         }
     }
     if args.get_bool("digest") {
         println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
-        println!("at least, it will once you edit the code to uncomment the line.")
-        // let source = args.get_str("<source>");
-        // let target = args.get_str("<target>");
-        // digest_livejournal(&source, &target); // will overwrite "prefix.offsets" and "prefix.targets"
+        println!("at least, it will once you edit the code to uncomment the line.");
+        let source = args.get_str("<source>");
+        let target = args.get_str("<target>");
+        let mut graph = livejournal(&source);
+        organize_graph(&mut graph);
+        // digest_graph_vector(&extract_fragment(&graph, 0, 1), target); // will overwrite "prefix.offsets" and "prefix.targets"
     }
     if args.get_bool("help") {
         println!("the code presently assumes you have access to the livejournal graph, from:");
@@ -82,7 +100,7 @@ fn intersect<E: Ord>(aaa: &[E], mut bbb: &[E]) -> u64 {
     count
 }
 
-fn raw_triangles<G: GraphTrait<Target=u32>>(graph: G) -> u64 {
+fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     let mut count = 0;
     for a in (0..graph.nodes()) {
         let aaa = graph.edges(a);
@@ -99,7 +117,6 @@ fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
-        // let graph = loader(communicator.index(), communicator.peers());
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
                                           .scoped(move || triangles(communicator, loader))
                                           .unwrap());
@@ -147,10 +164,12 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
     // println!("nodes: {:?}", graph.borrow().nodes());
     let mut time = time::precise_time_ns();
     let step = 1000;
-    let limit = (graph.borrow().nodes() / step) + 1;
+    let nodes = graph.borrow().nodes() - 1;
+    let limit = (nodes / step) + 1;
     for index in (0..limit) {
         let index = index as usize;
-        let data = ((index * step) as u32 .. ((index + 1) * step) as u32).filter(|&x| x as u64 % comm_peers == comm_index).collect();
+        let data = ((index * step) as u32 .. ((index + 1) * step) as u32).filter(|&x| x as u64 % comm_peers == comm_index)
+                                                                         .filter(|&x| x < nodes as u32).collect();
         input.send_messages(&((), index as u64), data);
         input.advance(&((), index as u64), &((), index as u64 + 1));
         computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
@@ -216,9 +235,8 @@ fn extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVec
 
     for &(src,dst) in graph {
         if src as u64 % parts == index {
-            while src + 1 >= nodes.len() as u32 {
-                nodes.push(0);
-            }
+            while src + 1 >= nodes.len() as u32 { nodes.push(0); }
+            while dst + 1 >= nodes.len() as u32 { nodes.push(0); } // allows unsafe access to nodes
 
             nodes[src as usize + 1] += 1;
             edges.push(dst);
@@ -233,7 +251,7 @@ fn extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVec
 }
 
 
-fn digest_graph_vector<E: Ord+Copy>(graph: &GraphVector<E>, output_prefix: &String) {
+fn digest_graph_vector<E: Ord+Copy>(graph: &GraphVector<E>, output_prefix: &str) {
     let mut edge_writer = BufWriter::new(File::create(format!("{}.targets", output_prefix)).unwrap());
     let mut node_writer = BufWriter::new(File::create(format!("{}.offsets", output_prefix)).unwrap());
     node_writer.write_all(unsafe { typed_as_byte_slice(&graph.nodes[..]) }).unwrap();
