@@ -6,6 +6,7 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies.timely]
 git="https://github.com/frankmcsherry/timely-dataflow"
+# path="../timely-dataflow"
 
 [dependencies]
 docopt="0.6.59"

@@ -36,9 +36,11 @@ pub struct GraphVector<E> {
 
 impl<E: Ord+Send+'static> GraphTrait for GraphVector<E> {
     type Target = E;
+    #[inline(always)]
     fn nodes(&self) -> usize {
         self.nodes.len()
     }
+    #[inline(always)]
     fn edges(&self, node: usize) -> &[E] {
         if node + 1 < self.nodes.len() {
             let start = self.nodes[node] as usize;

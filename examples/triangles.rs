@@ -11,32 +11,26 @@ extern crate dataflow_join;
 extern crate docopt;
 use docopt::Docopt;
 
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write, stdin};
 use std::fs::File;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::thread;
 use core::raw::Slice as RawSlice;
 
-use dataflow_join::{GenericJoinExt, FlattenExt};
+use dataflow_join::GenericJoinExt;
 use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt, gallop};
-// use dataflow_join::{PrefixExtender, GenericJoinExt, FlattenExt, TypedMemoryMap};
 
 use timely::progress::scope::Scope;
-use timely::progress::subgraph::new_graph;
-use timely::example::input::InputExtensionTrait;
-use timely::communication::{Data, Communicator, ProcessCommunicator};
+use timely::progress::nested::subgraph::new_graph;
+use timely::progress::nested::product::Product;
+use timely::example::*;
+use timely::communication::*;
 
 use timely::progress::Graph;
-use timely::example::stream::Stream;
-use timely::example::unary::UnaryExt;
-use timely::communication::exchange::Pipeline;
-use timely::communication::observer::ObserverSessionExt;
-use timely::communication::Pullable;
-use columnar::Columnar;
 
 static USAGE: &'static str = "
-Usage: triangles dataflow (text | binary) <source> <workers>
+Usage: triangles dataflow (text | binary) <source> <workers> [--inspect] [--interactive]
        triangles compute (text | binary) <source>
        triangles digest <source> <target>
        triangles help
@@ -46,17 +40,19 @@ fn main () {
     let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
 
     if args.get_bool("dataflow") {
+        let inspect = args.get_bool("--inspect");
+        let interactive = args.get_bool("--interactive");
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
                       else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
-        println!("starting triangles dataflow with {:?} workers", workers);
+        println!("starting triangles dataflow with {:?} worker{}; inspection: {:?}, interactive: {:?}", workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
         let source = args.get_str("<source>");
         if args.get_bool("text") {
             let mut graph = livejournal(&source);
             organize_graph(&mut graph);
-            triangles_multi(ProcessCommunicator::new_vector(workers), |index, peers| extract_fragment(&graph, index, peers));
+            triangles_multi(ProcessCommunicator::new_vector(workers), |index, peers| extract_fragment(&graph, index, peers), inspect, interactive);
         }
         if args.get_bool("binary") {
-            triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source));
+            triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive);
         }
     }
     if args.get_bool("compute") {
@@ -76,10 +72,10 @@ fn main () {
         println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
         println!("at least, it will once you edit the code to uncomment the line.");
         let source = args.get_str("<source>");
-        let target = args.get_str("<target>");
+        let _target = args.get_str("<target>");
         let mut graph = livejournal(&source);
         organize_graph(&mut graph);
-        // digest_graph_vector(&extract_fragment(&graph, 0, 1), target); // will overwrite "prefix.offsets" and "prefix.targets"
+        // _digest_graph_vector(&extract_fragment(&graph, 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
     }
     if args.get_bool("help") {
         println!("the code presently assumes you have access to the livejournal graph, from:");
@@ -105,6 +101,7 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     for a in (0..graph.nodes()) {
         let aaa = graph.edges(a);
         for &b in aaa {
+            // println!("considering edge {} {}", a, b);
             let bbb = graph.edges(b as usize);
             count += if aaa.len() < bbb.len() { intersect(aaa.clone(), bbb) }
                      else                     { intersect(bbb, aaa.clone()) };
@@ -113,17 +110,17 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     count
 }
 
-fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync>(communicators: Vec<C>, loader: F) {
+fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool) {
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles(communicator, loader))
+                                          .scoped(move || triangles(communicator, loader, inspect, interactive))
                                           .unwrap());
     }
 }
 
-fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(communicator: C, loader: &F) {
+fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(communicator: C, loader: &F, inspect: bool, interactive: bool) {
     let comm_index = communicator.index();
     let comm_peers = communicator.peers();
 
@@ -132,58 +129,87 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
     let (mut input, mut stream) = computation.new_input::<u32>();
 
     // extend u32s to pairs, then pairs to triples.
-    let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )]).flatten()
+    let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                              .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
                               .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                            &graph.extend_using(|| { |&(_,b)| b as u64 })]);
+                            //   .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)));
 
-    // panic!("triangles: {:?}", graph.borrow().triangles());
+    // let mut triangles = _quads(&mut triangles, &graph);
 
-    // triangles.observe();
-   //  triangles.observe(|&((a,b), c)| println!("triangle: ({:?}, {:?}, {:?})", a, b, c));
-   //
-   //  let mut quads = triangles.extend(vec![Box::new(fragment.extend_using(|| { |&((a,_),_)| a as u64 })),
-   //                                        Box::new(fragment.extend_using(|| { |&((_,b),_)| b as u64 })),
-   //                                        Box::new(fragment.extend_using(|| { |&((_,_),c)| c as u64 }))]).flatten();
-   //
-   //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
-   //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
-   //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
-   //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
-   //
-   // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
-   //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
-   //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
-   //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
-   //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
-   //
-   // sixes.observe(|&x| println!("observed: {:?}", x));
+     if inspect {
+         triangles.inspect(|x| println!("triangles: {:?}", x));
+     }
 
     computation.0.borrow_mut().get_internal_summary();
     computation.0.borrow_mut().set_external_summary(Vec::new(), &mut Vec::new());
 
-    // println!("nodes: {:?}", graph.borrow().nodes());
-    let mut time = time::precise_time_ns();
-    let step = 1000;
-    let nodes = graph.borrow().nodes() - 1;
-    let limit = (nodes / step) + 1;
-    for index in (0..limit) {
-        let index = index as usize;
-        let data = ((index * step) as u32 .. ((index + 1) * step) as u32).filter(|&x| x as u64 % comm_peers == comm_index)
-                                                                         .filter(|&x| x < nodes as u32).collect();
-        input.send_messages(&((), index as u64), data);
-        input.advance(&((), index as u64), &((), index as u64 + 1));
-        computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
-        // println!("enumerated triangles from ({:?}..{:?}) in {:?}ns", step * index, step * (index + 1), (time::precise_time_ns() - time));
-        time = time::precise_time_ns();
-    }
+    if interactive {
+        let mut stdinput = stdin();
+        let mut line = String::new();
+        for index in (0..) {
+            stdinput.read_line(&mut line).unwrap();
+            let start = time::precise_time_ns();
+            if let Some(word) = line.words().next() {
+                let read = word.parse();
+                if let Ok(number) = read {
+                    input.send_messages(&Product::new((), index as u64), vec![number]);
+                }
+            }
+            line.clear();
 
-    input.close_at(&((), limit as u64));
-    while computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new()) { }
+            input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
+            for _ in (0..5) {
+                computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
+            }
+
+            println!("elapsed: {:?}us", (time::precise_time_ns() - start)/1000);
+        }
+    }
+    else {
+        let step = 1000;
+        let nodes = graph.borrow().nodes() - 1;
+        let limit = (nodes / step) + 1;
+        for index in (0..limit) {
+            let index = index as usize;
+            let data = ((index * step) as u32 .. ((index + 1) * step) as u32).filter(|&x| x as u64 % comm_peers == comm_index)
+                                                                             .filter(|&x| x < nodes as u32)
+                                                                             .collect();
+            input.send_messages(&Product::new((), index as u64), data);
+            input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
+            computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
+        }
+        input.close_at(&Product::new((), limit as u64));
+        while computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new()) { }
+    }
+}
+
+fn _quads<G: Graph, G2: GraphTrait<Target=u32>>(stream: &mut Stream<G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) -> Stream<G, (((u32, u32), u32), u32)> {
+    //
+    stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
+                       &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
+                       &graph.extend_using(|| { |&((_,_),c)| c as u64 })])
+          .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+    //
+    //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
+    //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
+    //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
+    //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
+    //
+    // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
+    //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
+    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
+    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
+    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
+    //
+    // sixes.observe();
 }
 
 fn redirect(edges: &mut Vec<(u32, u32)>) {
-    let mut degrees = vec![0u64; 5000000];
+    let mut degrees = Vec::new();
     for &(src, dst) in edges.iter() {
+        while src as usize >= degrees.len() { degrees.push(0); }
+        while dst as usize >= degrees.len() { degrees.push(0); }
         degrees[src as usize] += 1;
         degrees[dst as usize] += 1;
     }
@@ -215,6 +241,12 @@ fn livejournal(filename: &str) -> Vec<(u32, u32)> {
 }
 
 fn organize_graph(graph: &mut Vec<(u32, u32)>) {
+
+    for index in (0..graph.len()) {
+        if graph[index].1 < graph[index].0 {
+            graph[index] = (graph[index].1, graph[index].0);
+        }
+    }
 
     graph.sort();
     println!("graph data sorted; {:?} edges", graph.len());
@@ -251,39 +283,23 @@ fn extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVec
 }
 
 
-fn digest_graph_vector<E: Ord+Copy>(graph: &GraphVector<E>, output_prefix: &str) {
+fn _digest_graph_vector<E: Ord+Copy>(graph: &GraphVector<E>, output_prefix: &str) {
     let mut edge_writer = BufWriter::new(File::create(format!("{}.targets", output_prefix)).unwrap());
     let mut node_writer = BufWriter::new(File::create(format!("{}.offsets", output_prefix)).unwrap());
-    node_writer.write_all(unsafe { typed_as_byte_slice(&graph.nodes[..]) }).unwrap();
-    edge_writer.write_all(unsafe { typed_as_byte_slice(&graph.edges[..]) }).unwrap();
+    node_writer.write_all(unsafe { _typed_as_byte_slice(&graph.nodes[..]) }).unwrap();
+
+    let mut slice = unsafe { _typed_as_byte_slice(&graph.edges[..]) };
+    while slice.len() > 0 {
+        let to_write = if slice.len() < 1000000 { slice.len() } else { 1000000 };
+        edge_writer.write_all(&slice[..to_write]).unwrap();
+        println!("wrote some; remaining: {}", slice.len());
+        slice = &slice[to_write..];
+    }
 }
 
-unsafe fn typed_as_byte_slice<T>(slice: &[T]) -> &[u8] {
+unsafe fn _typed_as_byte_slice<T>(slice: &[T]) -> &[u8] {
     std::mem::transmute(RawSlice {
         data: slice.as_ptr() as *const u8,
         len: slice.len() * std::mem::size_of::<T>(),
     })
-}
-
-
-
-// TODO : This should probably be in core timely dataflow
-pub trait ObserveExt<G: Graph, D: Data+Columnar> {
-    fn observe(&mut self) -> Self;
-}
-
-impl<G: Graph, D: Data+Columnar> ObserveExt<G, D> for Stream<G, D> {
-    fn observe(&mut self) -> Stream<G, D> {
-        let mut counter = 0u64;
-        self.unary(Pipeline, format!("Observe"), move |handle| {
-            while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                counter += data.len() as u64;
-                println!("seen: {:?} records", counter);
-                for datum in data {
-                    session.give(datum);
-                }
-            }
-        })
-    }
 }

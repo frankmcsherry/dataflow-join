@@ -11,15 +11,10 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use timely::progress::Graph;
-use timely::example::stream::Stream;
-use timely::example::unary::UnaryExt;
-use timely::example::select::SelectExt;
-use timely::example::filter::FilterExt;
-use timely::example::concat::ConcatExtensionTrait;
+use timely::example::*;
 use timely::example::partition::PartitionExt;
-use timely::communication::exchange::{Pipeline, Exchange};
-use timely::communication::observer::ObserverSessionExt;
-use timely::communication::{Data, Pullable};
+use timely::communication::pact::Exchange;
+use timely::communication::*;
 
 use columnar::Columnar;
 
@@ -53,6 +48,7 @@ pub use typedrw::TypedMemoryMap;
 // The important part of this algorithm is that step d.i should take roughly constant time.
 
 
+// record-by-record prefix extension functionality
 pub trait PrefixExtender<Prefix, Extension> {
     // these are needed to tell timely dataflow how to route prefixes
     type RoutingFunction: Fn(&Prefix)->u64+'static;
@@ -63,6 +59,14 @@ pub trait PrefixExtender<Prefix, Extension> {
     fn intersect(&self, &Prefix, &mut Vec<Extension>);
 }
 
+// functionality required by the GenericJoin layer
+pub trait StreamPrefixExtender<G: Graph, Prefix: Data+Columnar, Extension: Data+Columnar> {
+    fn count(&self, &mut Stream<G, (Prefix, u64, u64)>, u64) -> Stream<G, (Prefix, u64, u64)>;
+    fn propose(&self, &mut Stream<G, Prefix>) -> Stream<G, (Prefix, Vec<Extension>)>;
+    fn intersect(&self, &mut Stream<G, (Prefix, Vec<Extension>)>) -> Stream<G, (Prefix, Vec<Extension>)>;
+}
+
+// implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
 impl<G, P, E, PE> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>>
 where G: Graph,
       P: Data+Columnar,
@@ -75,19 +79,11 @@ where G: Graph,
         stream.unary(exch, format!("Count"), move |handle| {
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                for (prefix, old_count, old_index) in data {
-                    let new_count = extender.count(&prefix);
-                    let (count, index) = if new_count < old_count {
-                        (new_count, ident)
-                    }
-                    else {
-                        (old_count, old_index)
-                    };
-                    if count > 0 {
-                        session.give((prefix, count, index));
-                    }
-                }
+                handle.output.give_at(&time, data.into_iter().filter_map(|(p,c,i)| {
+                    let nc = extender.count(&p);
+                    if nc > c { Some((p,c,i)) }
+                    else      { if nc > 0 { Some((p,nc,ident)) } else { None } }
+                }));
             }
         })
     }
@@ -99,13 +95,10 @@ where G: Graph,
         stream.unary(exch, format!("Propose"), move |handle| {
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                for prefix in data {
-                    let extensions = extender.propose(&prefix);
-                    if extensions.len() > 0 {
-                        session.give((prefix, extensions));
-                    }
-                }
+                handle.output.give_at(&time, data.into_iter().map(|p| {
+                    let x = extender.propose(&p);
+                    (p, x)
+                }));
             }
         })
     }
@@ -116,20 +109,13 @@ where G: Graph,
         stream.unary(exch, format!("Intersect"), move |handle| {
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                for (prefix, mut extensions) in data {
+                handle.output.give_at(&time, data.into_iter().filter_map(|(prefix, mut extensions)| {
                     extender.intersect(&prefix, &mut extensions);
-                    session.give((prefix, extensions));
-                }
+                    if extensions.len() > 0 { Some((prefix, extensions)) } else { None }
+                }));
             }
         })
     }
-}
-
-pub trait StreamPrefixExtender<G: Graph, Prefix: Data+Columnar, Extension: Data+Columnar> {
-    fn count(&self, &mut Stream<G, (Prefix, u64, u64)>, u64) -> Stream<G, (Prefix, u64, u64)>;
-    fn propose(&self, &mut Stream<G, Prefix>) -> Stream<G, (Prefix, Vec<Extension>)>;
-    fn intersect(&self, &mut Stream<G, (Prefix, Vec<Extension>)>) -> Stream<G, (Prefix, Vec<Extension>)>;
 }
 
 pub trait GenericJoinExt<G, P:Data+Columnar, E:Data+Columnar> {
@@ -141,16 +127,15 @@ impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Str
     fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)> {
 
         // improve the counts using each extender
-        let mut counts = self.select(|p| (p, 1 << 31, 0));
+        let mut counts = self.map(|p| (p, 1 << 31, 0));
         for index in (0..extenders.len()) {
-            counts = extenders[index].count(&mut counts, index as u64)
-                                     .filter(|x| x.1 > 0);
+            counts = extenders[index].count(&mut counts, index as u64);
         }
 
         let mut results = Vec::new();
-        let mut parts = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
-        for index in (0..extenders.len()) {
-            let mut nominations = parts[index].select(|(x, _, _)| x);
+        let parts = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
+        for (index, mut part) in parts.into_iter().enumerate() {
+            let mut nominations = part.map(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(&mut nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
                 extensions = extenders[other].intersect(&mut extensions);
@@ -158,32 +143,6 @@ impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Str
             results.push(extensions);
         }
 
-        if let Some(mut output) = results.pop() {
-            while let Some(mut result) = results.pop() {
-                output = output.concat(&mut result);
-            }
-
-            output
-        }
-        else { panic!("extenders.len() == 0"); }
-    }
-}
-
-pub trait FlattenExt<G: Graph, P: Data+Columnar, E: Data+Columnar> {
-    fn flatten(&mut self) -> Stream<G, (P, E)>;
-}
-
-impl<G: Graph, P: Data+Columnar, E: Data+Columnar> FlattenExt<G, P, E> for Stream<G, (P, Vec<E>)> {
-    fn flatten(&mut self) -> Stream<G, (P, E)> {
-        self.unary(Pipeline, format!("Flatten"), move |handle| {
-            while let Some((time, data)) = handle.input.pull() {
-                let mut session = handle.output.session(&time);
-                for (prefix, extensions) in data {
-                    for extension in extensions {
-                        session.give((prefix.clone(), extension));
-                    }
-                }
-            }
-        })
+        results.concatenate()
     }
 }

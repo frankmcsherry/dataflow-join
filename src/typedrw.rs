@@ -19,7 +19,7 @@ impl<T:Copy> TypedMemoryMap<T> {
         let size = file.metadata().unwrap().len() as usize;
         TypedMemoryMap {
             map: MemoryMap::new(size, &[MapReadable, MapFd(file.as_raw_fd())]).unwrap(),
-            len: size,
+            len: size / mem::size_of::<T>(),
             phn: PhantomData,
         }
     }
@@ -32,7 +32,7 @@ impl<T:Copy> ops::Index<ops::RangeFull> for TypedMemoryMap<T> {
         // assert!(self.len <= self.map.len());
         unsafe { mem::transmute(RawSlice {
             data: self.map.data() as *const u8,
-            len: self.len / mem::size_of::<T>(),
+            len: self.len,
         })}
     }
 }
