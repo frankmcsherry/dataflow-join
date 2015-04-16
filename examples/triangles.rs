@@ -21,13 +21,13 @@ use core::raw::Slice as RawSlice;
 use dataflow_join::GenericJoinExt;
 use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt, gallop};
 
+use timely::progress::Graph;
 use timely::progress::scope::Scope;
 use timely::progress::nested::subgraph::new_graph;
 use timely::progress::nested::product::Product;
 use timely::example::*;
 use timely::communication::*;
 
-use timely::progress::Graph;
 
 static USAGE: &'static str = "
 Usage: triangles dataflow (text | binary) <source> <workers> [--inspect] [--interactive]
@@ -101,7 +101,6 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     for a in (0..graph.nodes()) {
         let aaa = graph.edges(a);
         for &b in aaa {
-            // println!("considering edge {} {}", a, b);
             let bbb = graph.edges(b as usize);
             count += if aaa.len() < bbb.len() { intersect(aaa.clone(), bbb) }
                      else                     { intersect(bbb, aaa.clone()) };
@@ -125,10 +124,10 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
     let comm_peers = communicator.peers();
 
     let graph = Rc::new(RefCell::new(loader(comm_index, comm_peers)));
-    let mut computation = new_graph(communicator);
+    let mut computation = new_graph::<u64, C>(communicator);
     let (mut input, mut stream) = computation.new_input::<u32>();
 
-    // extend u32s to pairs, then pairs to triples.
+    // // extend u32s to pairs, then pairs to triples.
     let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
                               .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
                               .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
@@ -142,7 +141,7 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
      }
 
     computation.0.borrow_mut().get_internal_summary();
-    computation.0.borrow_mut().set_external_summary(Vec::new(), &mut Vec::new());
+    computation.0.borrow_mut().set_external_summary(Vec::new(), &mut[]);
 
     if interactive {
         let mut stdinput = stdin();
@@ -160,7 +159,7 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
 
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
             for _ in (0..5) {
-                computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
+                computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]);
             }
 
             println!("elapsed: {:?}us", (time::precise_time_ns() - start)/1000);
@@ -177,10 +176,10 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
                                                                              .collect();
             input.send_messages(&Product::new((), index as u64), data);
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
-            computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new());
+            computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]);
         }
         input.close_at(&Product::new((), limit as u64));
-        while computation.0.borrow_mut().pull_internal_progress(&mut Vec::new(), &mut Vec::new(), &mut Vec::new()) { }
+        while computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]) { }
     }
 }
 
