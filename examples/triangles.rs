@@ -125,23 +125,24 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
 
     let graph = Rc::new(RefCell::new(loader(comm_index, comm_peers)));
     let mut computation = new_graph::<u64, C>(communicator);
-    let (mut input, mut stream) = computation.new_input::<u32>();
+    let mut input = {
+        let builder = &computation.builder();
+        let (input, mut stream) = builder.new_input::<u32>();
 
-    // // extend u32s to pairs, then pairs to triples.
-    let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
-                              .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
-                              .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
-                                           &graph.extend_using(|| { |&(_,b)| b as u64 })]);
-                            //   .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)));
+        // // extend u32s to pairs, then pairs to triples.
+        let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                                  .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+                                  .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
+                                               &graph.extend_using(|| { |&(_,b)| b as u64 })]);
+                                //   .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)));
 
-    // let mut triangles = _quads(&mut triangles, &graph);
+        if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
 
-     if inspect {
-         triangles.inspect(|x| println!("triangles: {:?}", x));
-     }
+        input
+    };
 
-    computation.0.borrow_mut().get_internal_summary();
-    computation.0.borrow_mut().set_external_summary(Vec::new(), &mut[]);
+    computation.0.get_internal_summary();
+    computation.0.set_external_summary(Vec::new(), &mut[]);
 
     if interactive {
         let mut stdinput = stdin();
@@ -159,7 +160,7 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
 
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
             for _ in (0..5) {
-                computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]);
+                computation.0.pull_internal_progress(&mut[], &mut[], &mut[]);
             }
 
             println!("elapsed: {:?}us", (time::precise_time_ns() - start)/1000);
@@ -176,14 +177,14 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
                                                                              .collect();
             input.send_messages(&Product::new((), index as u64), data);
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
-            computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]);
+            computation.0.pull_internal_progress(&mut[], &mut[], &mut[]);
         }
         input.close_at(&Product::new((), limit as u64));
-        while computation.0.borrow_mut().pull_internal_progress(&mut[], &mut[], &mut[]) { }
+        while computation.0.pull_internal_progress(&mut[], &mut[], &mut[]) { }
     }
 }
 
-fn _quads<G: Graph, G2: GraphTrait<Target=u32>>(stream: &mut Stream<G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) -> Stream<G, (((u32, u32), u32), u32)> {
+fn _quads<'a, 'b: 'a, G: Graph+'b, G2: GraphTrait<Target=u32>>(stream: &mut Stream<'a, 'b, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) -> Stream<'a, 'b, G, (((u32, u32), u32), u32)> {
     //
     stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
                        &graph.extend_using(|| { |&((_,b),_)| b as u64 }),

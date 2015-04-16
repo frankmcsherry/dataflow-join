@@ -60,19 +60,19 @@ pub trait PrefixExtender<Prefix, Extension> {
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<G: Graph, Prefix: Data+Columnar, Extension: Data+Columnar> {
-    fn count(&self, &mut Stream<G, (Prefix, u64, u64)>, u64) -> Stream<G, (Prefix, u64, u64)>;
-    fn propose(&self, &mut Stream<G, Prefix>) -> Stream<G, (Prefix, Vec<Extension>)>;
-    fn intersect(&self, &mut Stream<G, (Prefix, Vec<Extension>)>) -> Stream<G, (Prefix, Vec<Extension>)>;
+pub trait StreamPrefixExtender<'a, 'b: 'a, G: Graph+'b, Prefix: Data+Columnar, Extension: Data+Columnar> {
+    fn count(&self, &mut Stream<'a, 'b, G, (Prefix, u64, u64)>, u64) -> Stream<'a, 'b, G, (Prefix, u64, u64)>;
+    fn propose(&self, &mut Stream<'a, 'b, G, Prefix>) -> Stream<'a, 'b, G, (Prefix, Vec<Extension>)>;
+    fn intersect(&self, &mut Stream<'a, 'b, G, (Prefix, Vec<Extension>)>) -> Stream<'a, 'b, G, (Prefix, Vec<Extension>)>;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<G, P, E, PE> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>>
-where G: Graph,
+impl<'a, 'b: 'a, G, P, E, PE> StreamPrefixExtender<'a, 'b, G, P, E> for Rc<RefCell<PE>>
+where G: Graph+'b,
       P: Data+Columnar,
       E: Data+Columnar,
       PE: PrefixExtender<P, E>+'static {
-    fn count(&self, stream: &mut Stream<G, (P, u64, u64)>, ident: u64) -> Stream<G, (P, u64, u64)> {
+    fn count(&self, stream: &mut Stream<'a, 'b, G, (P, u64, u64)>, ident: u64) -> Stream<'a, 'b, G, (P, u64, u64)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
@@ -88,7 +88,7 @@ where G: Graph,
         })
     }
 
-    fn propose(&self, stream: &mut Stream<G, P>) -> Stream<G, (P, Vec<E>)> {
+    fn propose(&self, stream: &mut Stream<'a, 'b, G, P>) -> Stream<'a, 'b, G, (P, Vec<E>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |x| func(x));
@@ -102,7 +102,7 @@ where G: Graph,
             }
         })
     }
-    fn intersect(&self, stream: &mut Stream<G, (P, Vec<E>)>) -> Stream<G, (P, Vec<E>)> {
+    fn intersect(&self, stream: &mut Stream<'a, 'b, G, (P, Vec<E>)>) -> Stream<'a, 'b, G, (P, Vec<E>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
@@ -118,13 +118,13 @@ where G: Graph,
     }
 }
 
-pub trait GenericJoinExt<G, P:Data+Columnar, E:Data+Columnar> {
-    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)>;
+pub trait GenericJoinExt<'a, 'b: 'a, G:Graph+'b, P:Data+Columnar, E:Data+Columnar> {
+    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<'a, 'b, G, P, E>>) -> Stream<'a, 'b, G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<G: Graph, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<G, P, E> for Stream<G, P> {
-    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<G, P, E>>) -> Stream<G, (P, Vec<E>)> {
+impl<'a, 'b: 'a, G: Graph+'b, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<'a, 'b, G, P, E> for Stream<'a, 'b, G, P> {
+    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<'a, 'b, G, P, E>>) -> Stream<'a, 'b, G, (P, Vec<E>)> {
 
         // improve the counts using each extender
         let mut counts = self.map(|p| (p, 1 << 31, 0));
