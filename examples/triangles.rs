@@ -24,7 +24,7 @@ use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt,
 use timely::progress::Graph;
 use timely::progress::scope::Scope;
 use timely::progress::graph::Root;
-use timely::progress::nested::subgraph::SubgraphBuilder;
+use timely::progress::nested::builder::Builder as SubgraphBuilder;
 use timely::progress::nested::product::Product;
 use timely::example::*;
 use timely::communication::*;
@@ -180,12 +180,12 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
         let limit = (nodes / step) + 1;
         for index in (0..limit) {
             let index = index as usize;
-            let data = ((index * step) as u32 .. ((index + 1) * step) as u32).filter(|&x| x as u64 % comm_peers == comm_index)
-                                                                             .filter(|&x| x < nodes as u32)
-                                                                             .collect();
+            let data = ((index * step) .. ((index + 1) * step)).filter(|&x| x as u64 % comm_peers == comm_index)
+                                                               .filter(|&x| x < nodes)
+                                                               .map(|x| x as u32)
+                                                               .collect();
             input.send_messages(&Product::new((), index as u64), data);
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
-            // computation.0.pull_internal_progress(&mut[], &mut[], &mut[]);
             root.step();
         }
         input.close_at(&Product::new((), limit as u64));
@@ -193,7 +193,9 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
     }
 }
 
-fn _quads<'a, 'b: 'a, G: Graph+'b, G2: GraphTrait<Target=u32>>(stream: &mut Stream<'a, 'b, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) -> Stream<'a, 'b, G, (((u32, u32), u32), u32)> {
+fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->
+                                                            Stream<'a, G, (((u32, u32), u32), u32)>
+where G: Graph+'a, G2: GraphTrait<Target=u32> {
     //
     stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
                        &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
