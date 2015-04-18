@@ -69,12 +69,9 @@ pub trait StreamPrefixExtender<G: GraphBuilder> {
     type Prefix: Data+Columnar;
     type Extension: Data+Columnar;
 
-    fn count<'a>(&self, ActiveStream<'a, G, (Self::Prefix, u64, u64)>, u64) ->
-        ActiveStream<'a, G, (Self::Prefix, u64, u64)> where G: 'a;
-    fn propose<'a>(&self, ActiveStream<'a, G, Self::Prefix>) ->
-        ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a;
-    fn intersect<'a>(&self, ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)>) ->
-        ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a;
+    fn count(&self, ActiveStream<G, (Self::Prefix, u64, u64)>, u64) -> ActiveStream<G, (Self::Prefix, u64, u64)>;
+    fn propose(&self, ActiveStream<G, Self::Prefix>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
+    fn intersect(&self, ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
@@ -85,8 +82,8 @@ where PE::Prefix: Data+Columnar,
     type Prefix = PE::Prefix;
     type Extension = PE::Extension;
 
-    fn count<'a>(&self, stream: ActiveStream<'a, G, (Self::Prefix, u64, u64)>, ident: u64) ->
-            ActiveStream<'a, G, (Self::Prefix, u64, u64)> where G: 'a {
+    fn count(&self, stream: ActiveStream<G, (Self::Prefix, u64, u64)>, ident: u64) ->
+            ActiveStream<G, (Self::Prefix, u64, u64)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
@@ -102,8 +99,8 @@ where PE::Prefix: Data+Columnar,
         })
     }
 
-    fn propose<'a>(&self, stream: ActiveStream<'a, G, Self::Prefix>) ->
-            ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a {
+    fn propose(&self, stream: ActiveStream<G, Self::Prefix>) ->
+            ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |x| func(x));
@@ -117,8 +114,8 @@ where PE::Prefix: Data+Columnar,
             }
         })
     }
-    fn intersect<'a>(&self, stream: ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)>) ->
-            ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a {
+    fn intersect(&self, stream: ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) ->
+            ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
@@ -134,16 +131,16 @@ where PE::Prefix: Data+Columnar,
     }
 }
 
-pub trait GenericJoinExt<'a, G:GraphBuilder+'a, P:Data+Columnar> {
+pub trait GenericJoinExt<G:GraphBuilder, P:Data+Columnar> {
     fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) ->
-            ActiveStream<'a, G, (P, Vec<E>)> where G: 'a ;
+            ActiveStream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<'a, G, P> GenericJoinExt<'a, G, P> for ActiveStream<'a, G, P>
-where G: GraphBuilder+'a, P:Data+Columnar {
+impl<G, P> GenericJoinExt<G, P> for ActiveStream<G, P>
+where G: GraphBuilder, P:Data+Columnar {
     fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) ->
-            ActiveStream<'a, G, (P, Vec<E>)> where G: 'a {
+            ActiveStream<G, (P, Vec<E>)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
         for (index,extender) in extenders.iter().enumerate() {
@@ -151,16 +148,18 @@ where G: GraphBuilder+'a, P:Data+Columnar {
         }
 
         // partition data, capture spark
-        let (parts, spark) = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
+        let (parts, mut spark) = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
 
         let mut results = Vec::new();
         for (index, part) in parts.into_iter().enumerate() {
-            let nominations = spark.enable(&part).map(|(x, _, _)| x);
+            let nominations = part.enable(spark).map(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
                 extensions = extenders[other].intersect(extensions);
             }
-            results.push(extensions.disable());
+
+            results.push(extensions.stream);    // save extensions
+            spark = extensions.builder;         // re-capture spark
         }
 
         spark.concatenate(results)

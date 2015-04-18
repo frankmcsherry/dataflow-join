@@ -18,24 +18,28 @@ use std::cell::RefCell;
 use std::thread;
 use core::raw::Slice as RawSlice;
 
+use core::cmp::Ordering::*;
+
 use dataflow_join::*;
 use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt, gallop};
 
 use timely::progress::scope::Scope;
+use timely::progress::nested::Summary::Local;
 use timely::progress::nested::product::Product;
-
-use timely::example_static::input::*;
-use timely::example_static::inspect::*;
-use timely::example_static::stream::*;
-use timely::example_static::builder::*;
-use timely::example_static::flat_map::*;
+// use timely::example_static::input::*;
+// use timely::example_static::inspect::*;
+// use timely::example_static::stream::*;
+// use timely::example_static::builder::*;
+// use timely::example_static::flat_map::*;
+use timely::example_static::*;
 
 use timely::communication::*;
-
+use timely::communication::pact::Pipeline;
 
 
 static USAGE: &'static str = "
 Usage: triangles dataflow (text | binary) <source> <workers> [--inspect] [--interactive]
+       triangles autorun <source> <workers>
        triangles compute (text | binary) <source>
        triangles digest <source> <target>
        triangles help
@@ -49,7 +53,8 @@ fn main () {
         let interactive = args.get_bool("--interactive");
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
                       else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
-        println!("starting triangles dataflow with {:?} worker{}; inspection: {:?}, interactive: {:?}", workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
+        println!("starting triangles dataflow with {:?} worker{}; inspection: {:?}, interactive: {:?}",
+                    workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
         let source = args.get_str("<source>");
         if args.get_bool("text") {
             let mut graph = livejournal(&source);
@@ -59,6 +64,14 @@ fn main () {
         if args.get_bool("binary") {
             triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive);
         }
+    }
+    if args.get_bool("autorun") {
+        let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
+                      else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
+        println!("starting triangles dataflow with {:?} worker{}; autorun",
+                    workers, if workers == 1 { "" } else { "s" });
+        let source = args.get_str("<source>");
+        triangles_auto_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source));
     }
     if args.get_bool("compute") {
         let source = args.get_str("<source>");
@@ -105,11 +118,26 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     count
 }
 
-fn intersect<E: Ord>(aaa: &[E], mut bbb: &[E]) -> u64 {
+fn intersect<E: Ord>(mut aaa: &[E], mut bbb: &[E]) -> u64 {
     let mut count = 0;
-    for a in aaa {
-        bbb = gallop(bbb, a);
-        if bbb.len() > 0 && &bbb[0] == a { count += 1; }
+    // magic gallop overhead # is 4
+    if aaa.len() < bbb.len() / 4 {
+        for a in aaa {
+            bbb = gallop(bbb, a);
+            if bbb.len() > 0 && &bbb[0] == a { count += 1; }
+        }
+    }
+    else {
+        while aaa.len() > 0 && bbb.len() > 0 {
+            match aaa[0].cmp(&bbb[0]) {
+                Greater => { bbb = &bbb[1..]; },
+                Less    => { aaa = &aaa[1..]; },
+                Equal   => { aaa = &aaa[1..];
+                             bbb = &bbb[1..];
+                             count += 1;
+                           },
+            }
+        }
     }
     count
 }
@@ -124,6 +152,18 @@ where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+S
                                           .unwrap());
     }
 }
+
+fn triangles_auto_multi<C, G, F>(communicators: Vec<C>, loader: F)
+where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
+    let mut guards = Vec::new();
+    let loader = &loader;
+    for communicator in communicators.into_iter() {
+        guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
+                                          .scoped(move || triangles_auto(communicator, loader))
+                                          .unwrap());
+    }
+}
+
 
 fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool)
 where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
@@ -141,7 +181,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         // extend u32s to pairs, then pairs to triples.
         let triangles = builder.enable(&stream)
                                .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
-                               .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+                               .flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
                                .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                             &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
@@ -189,6 +229,49 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         input.close_at(&Product::new((), limit as u64));
         while root.step() { }
     }
+}
+
+fn triangles_auto<C, G, F>(communicator: C, loader: &F)
+where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
+    let index = communicator.index();
+    let peers = communicator.peers();
+
+    let batch = 100;
+    let graph = Rc::new(RefCell::new(loader(index, peers)));
+    let nodes = graph.borrow().nodes() as u64;
+
+    let mut root = GraphRoot::new(communicator);
+
+    {   // new scope to avoid long borrow on root
+
+        let mut builder = root.new_subgraph::<u64>();
+
+        let (mut feedback, stream) = builder.feedback(Product::new((), nodes + 1), Local(1));
+
+        let triangles =
+            stream.enable(&mut builder)
+                   .unary_notify(Pipeline, format!("Input"), vec![Product::new((), 0)], move |handle| {
+                       if let Some((time, _count)) = handle.notificator.next() {
+                           if time.inner < (nodes / batch) {
+                               handle.notificator.notify_at(&Product::new((), time.inner + 1));
+                           }
+                           let mut session = handle.output.session(&time);
+                           for next in (0..(batch/peers)) {
+                               session.give(time.inner * batch + next * peers + index);
+                           }
+                       }})
+                   .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                   .flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
+                   .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
+                                &graph.extend_using(|| { |&(_,b)| b as u64 })])
+                   .filter(|_| false)
+                   .map(|_| ((0,0),0))
+                   .disable();
+
+        feedback.connect_input(&triangles, &mut builder);
+    }
+
+    while root.step() { }
 }
 
 // fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->

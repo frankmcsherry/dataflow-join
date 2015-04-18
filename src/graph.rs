@@ -112,10 +112,19 @@ where <G as GraphTrait>::Target : Clone {
         let node = (self.logic)(prefix) as usize;
         let graph = self.graph.borrow();
         let mut slice = graph.edges(node);
-        list.retain(move |value| {
-            slice = gallop(slice, value);
-            slice.len() > 0 && &slice[0] == value
-        });
+
+        if list.len() < slice.len() / 4 {
+            list.retain(|value| {
+                slice = gallop(slice, value);
+                slice.len() > 0 && &slice[0] == value
+            });
+        }
+        else {
+            list.retain(move |value| {
+                while slice.len() > 0 && &slice[0] < value { slice = &slice[1..]; }
+                slice.len() > 0 && &slice[0] == value
+            });
+        }
     }
 }
 
