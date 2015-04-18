@@ -10,9 +10,7 @@ extern crate mmap;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use timely::progress::Graph;
-use timely::example::*;
-use timely::example::partition::PartitionExt;
+use timely::example_static::*;
 use timely::communication::pact::Exchange;
 use timely::communication::*;
 
@@ -49,30 +47,46 @@ pub use typedrw::TypedMemoryMap;
 
 
 // record-by-record prefix extension functionality
-pub trait PrefixExtender<Prefix, Extension> {
-    // these are needed to tell timely dataflow how to route prefixes
-    type RoutingFunction: Fn(&Prefix)->u64+'static;
-    fn route(&self) -> Self::RoutingFunction;
+pub trait PrefixExtender {
+
     // these are the parts required for the join algorithm
-    fn count(&self, &Prefix) -> u64;
-    fn propose(&self, &Prefix) -> Vec<Extension>;
-    fn intersect(&self, &Prefix, &mut Vec<Extension>);
+    type Prefix;                // type of record that can be extended
+    type Extension;             // type appended as an extension
+
+    fn count(&self, &Self::Prefix) -> u64;
+    fn propose(&self, &Self::Prefix) -> Vec<Self::Extension>;
+    fn intersect(&self, &Self::Prefix, &mut Vec<Self::Extension>);
+
+    // these are needed to tell timely dataflow how to route prefixes.
+    // this object will be shared under an Rc<RefCell<...>> so we want
+    // to give back a function, rather than provide a method ourself.
+    type RoutingFunction: Fn(&Self::Prefix)->u64+'static;
+    fn route(&self) -> Self::RoutingFunction;
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<'a, G: Graph+'a, Prefix: Data+Columnar, Extension: Data+Columnar> {
-    fn count(&self, &mut Stream<'a, G, (Prefix, u64, u64)>, u64) -> Stream<'a, G, (Prefix, u64, u64)>;
-    fn propose(&self, &mut Stream<'a, G, Prefix>) -> Stream<'a, G, (Prefix, Vec<Extension>)>;
-    fn intersect(&self, &mut Stream<'a, G, (Prefix, Vec<Extension>)>) -> Stream<'a, G, (Prefix, Vec<Extension>)>;
+pub trait StreamPrefixExtender<G: GraphBuilder> {
+    type Prefix: Data+Columnar;
+    type Extension: Data+Columnar;
+
+    fn count<'a>(&self, ActiveStream<'a, G, (Self::Prefix, u64, u64)>, u64) ->
+        ActiveStream<'a, G, (Self::Prefix, u64, u64)> where G: 'a;
+    fn propose<'a>(&self, ActiveStream<'a, G, Self::Prefix>) ->
+        ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a;
+    fn intersect<'a>(&self, ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)>) ->
+        ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<'a, G, P, E, PE> StreamPrefixExtender<'a, G, P, E> for Rc<RefCell<PE>>
-where G: Graph+'a,
-      P: Data+Columnar,
-      E: Data+Columnar,
-      PE: PrefixExtender<P, E>+'static {
-    fn count(&self, stream: &mut Stream<'a, G, (P, u64, u64)>, ident: u64) -> Stream<'a, G, (P, u64, u64)> {
+impl<G: GraphBuilder, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<RefCell<PE>>
+where PE::Prefix: Data+Columnar,
+      PE::Extension: Data+Columnar, {
+
+    type Prefix = PE::Prefix;
+    type Extension = PE::Extension;
+
+    fn count<'a>(&self, stream: ActiveStream<'a, G, (Self::Prefix, u64, u64)>, ident: u64) ->
+            ActiveStream<'a, G, (Self::Prefix, u64, u64)> where G: 'a {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
@@ -88,7 +102,8 @@ where G: Graph+'a,
         })
     }
 
-    fn propose(&self, stream: &mut Stream<'a, G, P>) -> Stream<'a, G, (P, Vec<E>)> {
+    fn propose<'a>(&self, stream: ActiveStream<'a, G, Self::Prefix>) ->
+            ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |x| func(x));
@@ -102,7 +117,8 @@ where G: Graph+'a,
             }
         })
     }
-    fn intersect(&self, stream: &mut Stream<'a, G, (P, Vec<E>)>) -> Stream<'a, G, (P, Vec<E>)> {
+    fn intersect<'a>(&self, stream: ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)>) ->
+            ActiveStream<'a, G, (Self::Prefix, Vec<Self::Extension>)> where G: 'a {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
@@ -118,31 +134,35 @@ where G: Graph+'a,
     }
 }
 
-pub trait GenericJoinExt<'a, G:Graph+'a, P:Data+Columnar, E:Data+Columnar> {
-    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<'a, G, P, E>>) -> Stream<'a, G, (P, Vec<E>)>;
+pub trait GenericJoinExt<'a, G:GraphBuilder+'a, P:Data+Columnar> {
+    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) ->
+            ActiveStream<'a, G, (P, Vec<E>)> where G: 'a ;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<'a, G: Graph+'a, P:Data+Columnar, E:Data+Columnar> GenericJoinExt<'a, G, P, E> for Stream<'a, G, P> {
-    fn extend(&mut self, extenders: Vec<&StreamPrefixExtender<'a, G, P, E>>) -> Stream<'a, G, (P, Vec<E>)> {
+impl<'a, G, P> GenericJoinExt<'a, G, P> for ActiveStream<'a, G, P>
+where G: GraphBuilder+'a, P:Data+Columnar {
+    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) ->
+            ActiveStream<'a, G, (P, Vec<E>)> where G: 'a {
 
-        // improve the counts using each extender
         let mut counts = self.map(|p| (p, 1 << 31, 0));
-        for index in (0..extenders.len()) {
-            counts = extenders[index].count(&mut counts, index as u64);
+        for (index,extender) in extenders.iter().enumerate() {
+            counts = extender.count(counts, index as u64);
         }
+
+        // partition data, capture spark
+        let (parts, spark) = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
 
         let mut results = Vec::new();
-        let parts = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
-        for (index, mut part) in parts.into_iter().enumerate() {
-            let mut nominations = part.map(|(x, _, _)| x);
-            let mut extensions = extenders[index].propose(&mut nominations);
+        for (index, part) in parts.into_iter().enumerate() {
+            let nominations = spark.enable(&part).map(|(x, _, _)| x);
+            let mut extensions = extenders[index].propose(nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
-                extensions = extenders[other].intersect(&mut extensions);
+                extensions = extenders[other].intersect(extensions);
             }
-            results.push(extensions);
+            results.push(extensions.disable());
         }
 
-        results.concatenate()
+        spark.concatenate(results)
     }
 }

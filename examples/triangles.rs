@@ -18,16 +18,20 @@ use std::cell::RefCell;
 use std::thread;
 use core::raw::Slice as RawSlice;
 
-use dataflow_join::GenericJoinExt;
+use dataflow_join::*;
 use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap, GraphExtenderExt, gallop};
 
-use timely::progress::Graph;
 use timely::progress::scope::Scope;
-use timely::progress::graph::Root;
-use timely::progress::nested::builder::Builder as SubgraphBuilder;
 use timely::progress::nested::product::Product;
-use timely::example::*;
+
+use timely::example_static::input::*;
+use timely::example_static::inspect::*;
+use timely::example_static::stream::*;
+use timely::example_static::builder::*;
+use timely::example_static::flat_map::*;
+
 use timely::communication::*;
+
 
 
 static USAGE: &'static str = "
@@ -88,15 +92,6 @@ fn main () {
     }
 }
 
-fn intersect<E: Ord>(aaa: &[E], mut bbb: &[E]) -> u64 {
-    let mut count = 0;
-    for a in aaa {
-        bbb = gallop(bbb, a);
-        if bbb.len() > 0 && &bbb[0] == a { count += 1; }
-    }
-    count
-}
-
 fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     let mut count = 0;
     for a in (0..graph.nodes()) {
@@ -110,7 +105,17 @@ fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
     count
 }
 
-fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool) {
+fn intersect<E: Ord>(aaa: &[E], mut bbb: &[E]) -> u64 {
+    let mut count = 0;
+    for a in aaa {
+        bbb = gallop(bbb, a);
+        if bbb.len() > 0 && &bbb[0] == a { count += 1; }
+    }
+    count
+}
+
+fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool)
+where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
@@ -120,39 +125,30 @@ fn triangles_multi<C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u
     }
 }
 
-fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(communicator: C, loader: &F, inspect: bool, interactive: bool) {
+fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool)
+where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
     let comm_index = communicator.index();
     let comm_peers = communicator.peers();
 
     let graph = Rc::new(RefCell::new(loader(comm_index, comm_peers)));
 
-    let mut root = Root::new(communicator);
-    let mut input = {
-        let borrow = root.builder();
-        let mut computation = SubgraphBuilder::new(&borrow);
+    let mut root = GraphRoot::new(communicator);
+    let mut input = { // new scope to avoid long borrow on root
 
-        let input = {
-            let builder = &computation.builder();
-            let (input, mut stream) = builder.new_input::<u32>();
+        let mut builder = root.new_subgraph();
+        let (input, stream) = builder.new_input::<u32>();
 
-            // // extend u32s to pairs, then pairs to triples.
-            let mut triangles = stream.extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
-                                      .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
-                                      .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
-                                                   &graph.extend_using(|| { |&(_,b)| b as u64 })]);
-                                    //   .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)));
+        // extend u32s to pairs, then pairs to triples.
+        let triangles = builder.enable(&stream)
+                               .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                               .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+                               .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
+                                            &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-            if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+        if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
 
-            input
-        };
-
-        computation.seal();
         input
     };
-
-    // computation.0.get_internal_summary();
-    // computation.0.set_external_summary(Vec::new(), &mut[]);
 
     if interactive {
         let mut stdinput = stdin();
@@ -180,41 +176,43 @@ fn triangles<C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G>(com
         let limit = (nodes / step) + 1;
         for index in (0..limit) {
             let index = index as usize;
-            let data = ((index * step) .. ((index + 1) * step)).filter(|&x| x as u64 % comm_peers == comm_index)
-                                                               .filter(|&x| x < nodes)
-                                                               .map(|x| x as u32)
-                                                               .collect();
+            let data = ((index * step) .. ((index + 1) * step))
+                           .filter(|&x| x as u64 % comm_peers == comm_index)
+                           .filter(|&x| x < nodes)
+                           .map(|x| x as u32)
+                           .collect();
             input.send_messages(&Product::new((), index as u64), data);
             input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
             root.step();
         }
+
         input.close_at(&Product::new((), limit as u64));
         while root.step() { }
     }
 }
 
-fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->
-                                                            Stream<'a, G, (((u32, u32), u32), u32)>
-where G: Graph+'a, G2: GraphTrait<Target=u32> {
-    //
-    stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
-                       &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
-                       &graph.extend_using(|| { |&((_,_),c)| c as u64 })])
-          .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
-    //
-    //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
-    //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
-    //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
-    //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
-    //
-    // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
-    //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
-    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
-    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
-    //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
-    //
-    // sixes.observe();
-}
+// fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->
+//                                                             Stream<'a, G, (((u32, u32), u32), u32)>
+// where G: GraphBuilder+'a, G2: GraphTrait<Target=u32> {
+//     //
+//     stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
+//                        &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
+//                        &graph.extend_using(|| { |&((_,_),c)| c as u64 })])
+//           .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+//     //
+//     //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
+//     //
+//     // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
+//     //
+//     // sixes.observe();
+// }
 
 fn redirect(edges: &mut Vec<(u32, u32)>) {
     let mut degrees = Vec::new();
