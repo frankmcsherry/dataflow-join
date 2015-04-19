@@ -47,32 +47,44 @@ pub use typedrw::TypedMemoryMap;
 
 
 // record-by-record prefix extension functionality
-pub trait PrefixExtender<P, E> {
+pub trait PrefixExtender {
 
     // these are the parts required for the join algorithm
-    fn count(&self, &P) -> u64;
-    fn propose(&self, &P) -> Vec<E>;
-    fn intersect(&self, &P, &mut Vec<E>);
+    type Prefix;                // type of record that can be extended
+    type Extension;             // type appended as an extension
+
+    fn count(&self, &Self::Prefix) -> u64;
+    fn propose(&self, &Self::Prefix) -> Vec<Self::Extension>;
+    fn intersect(&self, &Self::Prefix, &mut Vec<Self::Extension>);
 
     // these are needed to tell timely dataflow how to route prefixes.
     // this object will be shared under an Rc<RefCell<...>> so we want
     // to give back a function, rather than provide a method ourself.
-    type RoutingFunction: Fn(&P)->u64+'static;
+    type RoutingFunction: Fn(&Self::Prefix)->u64+'static;
     fn route(&self) -> Self::RoutingFunction;
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar, E: Data+Columnar> {
-    fn count(&self, ActiveStream<G, (P, u64, u64)>, u64) -> ActiveStream<G, (P, u64, u64)>;
-    fn propose(&self, ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)>;
-    fn intersect(&self, ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)>;
+pub trait StreamPrefixExtender<G: GraphBuilder> {
+    type Prefix: Data+Columnar;
+    type Extension: Data+Columnar;
+
+    fn count(&self, ActiveStream<G, (Self::Prefix, u64, u64)>, u64) -> ActiveStream<G, (Self::Prefix, u64, u64)>;
+    fn propose(&self, ActiveStream<G, Self::Prefix>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
+    fn intersect(&self, ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>> {
+impl<G: GraphBuilder, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<RefCell<PE>>
+where PE::Prefix: Data+Columnar,
+      PE::Extension: Data+Columnar,
+      {
 
-    fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) ->
-            ActiveStream<G, (P, u64, u64)> {
+    type Prefix = PE::Prefix;
+    type Extension = PE::Extension;
+
+    fn count(&self, stream: ActiveStream<G, (PE::Prefix, u64, u64)>, ident: u64) ->
+            ActiveStream<G, (PE::Prefix, u64, u64)> {
         let clone = self.clone();
 
         let func = self.borrow().route();
@@ -89,8 +101,8 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         })
     }
 
-    fn propose(&self, stream: ActiveStream<G, P>) ->
-            ActiveStream<G, (P, Vec<E>)> {
+    fn propose(&self, stream: ActiveStream<G, Self::Prefix>) ->
+            ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |x| func(x));
@@ -104,8 +116,8 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
             }
         })
     }
-    fn intersect(&self, stream: ActiveStream<G, (P, Vec<E>)>) ->
-            ActiveStream<G, (P, Vec<E>)> {
+    fn intersect(&self, stream: ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) ->
+            ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
@@ -121,14 +133,22 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
     }
 }
 
+pub trait TestExt<G:GraphBuilder, P:Data+Columnar> {
+    fn test<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) -> ActiveStream<G, P>;
+}
+
+impl<G: GraphBuilder, P: Data+Columnar> TestExt<G, P> for ActiveStream<G, P> {
+    fn test<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>) -> ActiveStream<G, P> { self }
+}
+
 pub trait GenericJoinExt<G:GraphBuilder, P:Data+Columnar> {
-    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
 impl<G: GraphBuilder, P:Data+Columnar> GenericJoinExt<G, P> for ActiveStream<G, P> {
-    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, Vec<E>)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
