@@ -129,6 +129,8 @@ where <G as GraphTrait>::Target : Clone {
 }
 
 // intended to advance slice to start at the first element >= value.
+
+#[inline(always)]
 pub fn gallop<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
     // if empty slice, or already >= element, return
     if slice.len() > 0 && &slice[0] < value {

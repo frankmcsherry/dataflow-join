@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use timely::example_static::*;
-use timely::communication::pact::{Exchange, Pipeline};
+use timely::communication::pact::Exchange;
 use timely::communication::*;
 
 use columnar::Columnar;
@@ -77,7 +77,7 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
 
         let func = self.borrow().route();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
-        stream.unary_notify(exch, format!("Count"), vec![], move |handle| {
+        stream.unary(exch, format!("Count"), move |handle| {
             let extender = clone.borrow();
             while let Some((time, data)) = handle.input.pull() {
                 handle.output.give_at(&time, data.into_iter().filter_map(|(p,c,i)| {
