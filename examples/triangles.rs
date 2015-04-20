@@ -31,11 +31,13 @@ use timely::communication::pact::Pipeline;
 
 
 static USAGE: &'static str = "
-Usage: triangles dataflow <source> <workers> [--inspect] [--interactive]
-       triangles autorun <source> <workers>
+Usage: triangles dataflow <source> <workers> <stepsize> [--inspect] [--interactive]
+       triangles autorun <source> <workers> <stepsize>
        triangles compute <source>
        triangles help
 ";
+
+
 
 fn main () {
     let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
@@ -44,20 +46,24 @@ fn main () {
         let inspect = args.get_bool("--inspect");
         let interactive = args.get_bool("--interactive");
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
-                      else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
+                      else { panic!("invalid setting for workers: {}", args.get_str("<workers>")) };
+        let stepsize = if let Ok(size) = args.get_str("<stepsize>").parse() { size }
+                      else { panic!("invalid setting for stepsize: {}", args.get_str("<stepsize>")) };
         println!("starting triangles dataflow with {:?} worker{}; inspection: {:?}, interactive: {:?}",
                     workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
         let source = args.get_str("<source>");
 
-        triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive);
+        triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive, stepsize);
     }
     if args.get_bool("autorun") {
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
-                      else { panic!("invalid setting for workers: {}", args.get_str("-t")) };;
+                      else { panic!("invalid setting for workers: {}", args.get_str("-t")) };
+      let stepsize = if let Ok(size) = args.get_str("<stepsize>").parse() { size }
+                    else { panic!("invalid setting for stepsize: {}", args.get_str("<stepsize>")) };
         println!("starting triangles dataflow with {:?} worker{}; autorun",
                     workers, if workers == 1 { "" } else { "s" });
         let source = args.get_str("<source>");
-        triangles_auto_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source));
+        triangles_auto_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), stepsize);
     }
     if args.get_bool("compute") {
         let source = args.get_str("<source>");
@@ -114,18 +120,18 @@ fn intersect<E: Ord>(mut aaa: &[E], mut bbb: &[E]) -> u64 {
 }
 
 
-fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool)
+fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool, step_size: u64)
 where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles(communicator, loader, inspect, interactive))
+                                          .scoped(move || triangles(communicator, loader, inspect, interactive, step_size))
                                           .unwrap());
     }
 }
 
-fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool)
+fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool, step_size: u64)
 where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
     let comm_index = communicator.index();
     let comm_peers = communicator.peers();
@@ -147,7 +153,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
 
         if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
 
-        input
+        input        
     };
 
     if interactive {
@@ -171,7 +177,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         }
     }
     else {
-        let step = 1000;
+        let step = step_size as usize;
         let nodes = graph.borrow().nodes() - 1;
         let limit = (nodes / step) + 1;
         for index in (0..limit) {
@@ -192,23 +198,23 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
 }
 
 
-fn triangles_auto_multi<C, G, F>(communicators: Vec<C>, loader: F)
+fn triangles_auto_multi<C, G, F>(communicators: Vec<C>, loader: F, step_size: u64)
 where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles_auto(communicator, loader))
+                                          .scoped(move || triangles_auto(communicator, loader, step_size))
                                           .unwrap());
     }
 }
 
-fn triangles_auto<C, G, F>(communicator: C, loader: &F)
+fn triangles_auto<C, G, F>(communicator: C, loader: &F, step_size: u64)
 where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
     let index = communicator.index();
     let peers = communicator.peers();
 
-    let batch = 100;
+    let batch = step_size;
     let graph = Rc::new(RefCell::new(loader(index, peers)));
     let nodes = graph.borrow().nodes() as u64;
 
