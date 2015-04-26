@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::cell::RefCell;
-use core::marker::PhantomData;
+use std::marker::PhantomData;
 
 use typedrw::TypedMemoryMap;
 use PrefixExtender;
@@ -103,9 +103,9 @@ where <G as GraphTrait>::Target : Clone {
         self.graph.borrow().edges(node).len() as u64
     }
 
-    fn propose(&self, prefix: &P) -> Vec<G::Target> {
+    fn propose(&self, prefix: &P, list: &mut Vec<G::Target>) {
         let node = (self.logic)(prefix) as usize;
-        self.graph.borrow().edges(node).to_vec()
+        list.push_all(self.graph.borrow().edges(node));
     }
 
     fn intersect(&self, prefix: &P, list: &mut Vec<G::Target>) {

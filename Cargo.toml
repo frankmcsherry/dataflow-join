@@ -9,7 +9,7 @@ git="https://github.com/frankmcsherry/timely-dataflow"
 # path="../timely-dataflow"
 
 [dependencies]
-docopt="0.6.59"
-columnar="0.0.14"
-time = "0.1.24"
+docopt="*"
+columnar="*"
+time = "*"
 mmap="*"

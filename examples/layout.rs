@@ -3,15 +3,15 @@ extern crate dataflow_join;
 extern crate docopt;
 use docopt::Docopt;
 
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::fs::File;
 use std::slice;
 use std::mem;
 
-use dataflow_join::graph::{GraphTrait, GraphVector};
+use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap};
 
 static USAGE: &'static str = "
-Usage: digest <source> <target>
+Usage: layout <source> <target>
 ";
 
 fn main() {
@@ -21,30 +21,45 @@ fn main() {
     println!("at least, it will once you edit the code to uncomment the line.");
     let source = args.get_str("<source>");
     let _target = args.get_str("<target>");
-    let mut graph = livejournal(&source);
-    organize_graph(&mut graph);
-    // _digest_graph_vector(&_extract_fragment(&graph, 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
+    let graph = layout(&source);
 
+    let graph = _extract_fragment(&graph, 0, 1);
+    _digest_graph_vector(&graph, _target);
 }
 
-// loads the livejournal file available at https://snap.stanford.edu/data/soc-LiveJournal1.html
-fn livejournal(filename: &str) -> Vec<(u32, u32)> {
-    let mut graph = Vec::new();
-    let file = BufReader::new(File::open(filename).unwrap());
-    for readline in file.lines() {
-        let line = readline.ok().expect("read error");
-        if !line.starts_with('#') {
-            let elts: Vec<&str> = line[..].split_whitespace().collect();
-            let src: u32 = elts[0].parse().ok().expect("malformed src");
-            let dst: u32 = elts[1].parse().ok().expect("malformed dst");
-            if src < dst { graph.push((src, dst)) }
-            if src > dst { graph.push((dst, src)) }
+fn layout(prefix: &str) -> Vec<(u32, u32)> {
+    let graph = GraphMMap::<u32>::new(&prefix);
+
+    let mut degree = Vec::new();
+    for node in 0..graph.nodes() {
+        for &edge in graph.edges(node) {
+            while degree.len() <= node { degree.push((0,0)); }
+            while degree.len() <= edge as usize { degree.push((0,0)); }
+            degree[node as usize].0 += 1u32;
+            degree[edge as usize].0 += 1u32;
         }
     }
 
-    println!("graph data loaded; {:?} edges", graph.len());
-    return graph;
+    for node in 0..degree.len() {
+        degree[node].1 = node as u32;
+    }
+
+    degree.sort();
+    for node in 0..degree.len() {
+        degree[node] = (degree[node].1, node as u32);
+    }
+
+    let mut result = Vec::new();
+    for node in 0..graph.nodes() {
+        for &edge in graph.edges(node) {
+            result.push((degree[node as usize].1, degree[edge as usize].1));
+        }
+    }
+
+    organize_graph(&mut result);
+    result
 }
+
 
 fn organize_graph(graph: &mut Vec<(u32, u32)>) {
 
@@ -59,30 +74,7 @@ fn organize_graph(graph: &mut Vec<(u32, u32)>) {
 
     graph.dedup();
     println!("graph data uniqed; {:?} edges", graph.len());
-
-    // speeds things up a bit by tweaking edge directions.
-    // loses the src < dst property, which can be helpful.
-    redirect(graph);
-    graph.sort();
-    println!("graph data dirctd; {:?} edges", graph.len());
 }
-
-fn redirect(edges: &mut Vec<(u32, u32)>) {
-    let mut degrees = Vec::new();
-    for &(src, dst) in edges.iter() {
-        while src as usize >= degrees.len() { degrees.push(0); }
-        while dst as usize >= degrees.len() { degrees.push(0); }
-        degrees[src as usize] += 1;
-        degrees[dst as usize] += 1;
-    }
-
-    for index in (0..edges.len()) {
-        if degrees[edges[index].0 as usize] > degrees[edges[index].1 as usize] {
-            edges[index] = (edges[index].1, edges[index].0);
-        }
-    }
-}
-
 
 fn _extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVector<u32> {
     let mut nodes = Vec::new();

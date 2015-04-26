@@ -1,11 +1,12 @@
 use std::mem;
-use core::raw::Slice as RawSlice;
+// use core::raw::Slice as RawSlice;
 use mmap::MapOption::{MapReadable, MapFd};
 use mmap::MemoryMap;
 use std::os::unix::prelude::AsRawFd;
-use core::ops;
+use std::slice;
+use std::ops;
 use std::fs::File;
-use core::marker::PhantomData;
+use std::marker::PhantomData;
 
 pub struct TypedMemoryMap<T:Copy> {
     map:    MemoryMap,      // mapped file
@@ -30,9 +31,10 @@ impl<T:Copy> ops::Index<ops::RangeFull> for TypedMemoryMap<T> {
     #[inline]
     fn index(&self, _index: ops::RangeFull) -> &[T] {
         // assert!(self.len <= self.map.len());
-        unsafe { mem::transmute(RawSlice {
-            data: self.map.data() as *const u8,
-            len: self.len,
-        })}
+        // unsafe { mem::transmute(RawSlice {
+        //     data: self.map.data() as *const u8,
+        //     len: self.len,
+        // })}
+        unsafe { slice::from_raw_parts(self.map.data() as *const T, self.len) }
     }
 }

@@ -1,25 +1,30 @@
 #![allow(dead_code)]
-#![feature(core)]
+#![feature(collections)]
+// #![feature(core)]
 
 extern crate columnar;
 extern crate timely;
-extern crate core;
 extern crate time;
 extern crate mmap;
 
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use timely::progress::timestamp::RootTimestamp;
+use timely::progress::nested::product::Product;
+use timely::progress::nested::Summary::Local;
 use timely::example_static::*;
-use timely::communication::pact::Exchange;
+use timely::communication::pact::{Pipeline, Exchange};
 use timely::communication::*;
 
 use columnar::Columnar;
 
 pub mod graph;
 mod typedrw;
+pub mod flattener;
 
 pub use typedrw::TypedMemoryMap;
+use flattener::*;
 
 // Algorithm 3 is an implementation of an instance of GenericJoin, a worst-case optimal join algorithm.
 
@@ -51,7 +56,7 @@ pub trait PrefixExtender<P, E> {
 
     // these are the parts required for the join algorithm
     fn count(&self, &P) -> u64;
-    fn propose(&self, &P) -> Vec<E>;
+    fn propose(&self, &P, &mut Vec<E>);
     fn intersect(&self, &P, &mut Vec<E>);
 
     // these are needed to tell timely dataflow how to route prefixes.
@@ -64,23 +69,23 @@ pub trait PrefixExtender<P, E> {
 // functionality required by the GenericJoin layer
 pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar, E: Data+Columnar> {
     fn count(&self, ActiveStream<G, (P, u64, u64)>, u64) -> ActiveStream<G, (P, u64, u64)>;
-    fn propose(&self, ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)>;
+    fn propose_a(&self, ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)>;
+    fn propose_b(&self, ActiveStream<G, P>, Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)>;
     fn intersect(&self, ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)>;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
 impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>> {
 
-    fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) ->
-            ActiveStream<G, (P, u64, u64)> {
+    fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) -> ActiveStream<G, (P, u64, u64)> {
         let clone = self.clone();
 
         let func = self.borrow().route();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
-        stream.unary(exch, format!("Count"), move |handle| {
+        stream.unary_stream(exch, format!("Count"), move |input, output| {
             let extender = clone.borrow();
-            while let Some((time, data)) = handle.input.pull() {
-                handle.output.give_at(&time, data.into_iter().filter_map(|(p,c,i)| {
+            while let Some((time, data)) = input.pull() {
+                output.give_at(&time, data.drain().filter_map(|(p,c,i)| {
                     let nc = extender.count(&p);
                     if nc > c { Some((p,c,i)) }
                     else      { if nc > 0 { Some((p,nc,ident)) } else { None } }
@@ -89,32 +94,49 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         })
     }
 
-    fn propose(&self, stream: ActiveStream<G, P>) ->
-            ActiveStream<G, (P, Vec<E>)> {
-        let func = self.borrow().route();
+    fn propose_a(&self, stream: ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)> {
         let clone = self.clone();
+        let func = self.borrow().route();
         let exch = Exchange::new(move |x| func(x));
-        stream.unary(exch, format!("Propose"), move |handle| {
+        stream.unary_stream(exch, format!("Propose"), move |input, output| {
             let extender = clone.borrow();
-            while let Some((time, data)) = handle.input.pull() {
-                handle.output.give_at(&time, data.into_iter().map(|p| {
-                    let x = extender.propose(&p);
-                    (p, x)
+            while let Some((time, data)) = input.pull() {
+                output.give_at(&time, data.drain().map(|p| {
+                    let mut vec = Vec::new();
+                    extender.propose(&p, &mut vec);
+                    (p, vec)
                 }));
             }
         })
     }
-    fn intersect(&self, stream: ActiveStream<G, (P, Vec<E>)>) ->
-            ActiveStream<G, (P, Vec<E>)> {
+    fn propose_b(&self, stream: ActiveStream<G, P>, other: Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)> {
+        let mut stash = Vec::new();
+        let clone = self.clone();
+        let func = self.borrow().route();
+        let exch = Exchange::new(move |x| func(x));
+        stream.binary_stream(other, exch, Pipeline, format!("Propose"), move |input1, input2, output| {
+            let extender = clone.borrow();
+            while let Some((_time, mut vec)) = input2.pull() { stash.append(&mut vec); }
+            while let Some((time, data)) = input1.pull() {
+                output.give_at(&time, data.drain().map(|p| {
+                    let mut vec = stash.pop().unwrap_or(Vec::new());
+                    extender.propose(&p, &mut vec);
+                    (p, vec)
+                }));
+            }
+        })
+    }
+    fn intersect(&self, stream: ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)> {
         let func = self.borrow().route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
-        stream.unary(exch, format!("Intersect"), move |handle| {
+        stream.unary_stream(exch, format!("Intersect"), move |input, output| {
             let extender = clone.borrow();
-            while let Some((time, data)) = handle.input.pull() {
-                handle.output.give_at(&time, data.into_iter().filter_map(|(prefix, mut extensions)| {
+            while let Some((time, data)) = input.pull() {
+                output.give_at(&time, data.drain().filter_map(|(prefix, mut extensions)| {
                     extender.intersect(&prefix, &mut extensions);
                     if extensions.len() > 0 { Some((prefix, extensions)) } else { None }
+                    // Some((prefix, extensions))   // don't drop extensions in --alt
                 }));
             }
         })
@@ -142,13 +164,52 @@ impl<G: GraphBuilder, P:Data+Columnar> GenericJoinExt<G, P> for ActiveStream<G, 
         let mut results = Vec::new();
         for (index, part) in parts.into_iter().enumerate() {
             let nominations = part.enable(spark).map(|(x, _, _)| x);
-            let mut extensions = extenders[index].propose(nominations);
+            let mut extensions = extenders[index].propose_a(nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
                 extensions = extenders[other].intersect(extensions);
             }
 
             results.push(extensions.stream);    // save extensions
             spark = extensions.builder;         // re-capture spark
+        }
+
+        spark.concatenate(results)
+    }
+}
+
+
+pub trait GenericJoinExt2<G:GraphBuilder, P:Data+Columnar> {
+    fn extend2<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+        -> ActiveStream<G, (P, E)>;
+}
+
+// A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
+impl<G: GraphBuilder<Timestamp=Product<RootTimestamp, u64>>, P:Data+Columnar> GenericJoinExt2<G, P> for ActiveStream<G, P> {
+    fn extend2<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+        -> ActiveStream<G, (P, E)> {
+
+        let mut counts = self.map(|p| (p, 1 << 31, 0));
+        for (index,extender) in extenders.iter().enumerate() {
+            counts = extender.count(counts, index as u64);
+        }
+
+        // partition data, capture spark
+        let (parts, mut spark) = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
+
+        let mut results = Vec::new();
+        for (index, part) in parts.into_iter().enumerate() {
+            let (feedback, buffers) = spark.loop_variable(RootTimestamp::new(1000000), Local(1));
+
+            let nominations = part.enable(spark).map(|(x, _, _)| x);
+            let mut extensions = extenders[index].propose_b(nominations, buffers);
+            for other in (0..extenders.len()).filter(|&x| x != index) {
+                extensions = extenders[other].intersect(extensions);
+            }
+
+            let (extensions, spent) = extensions.flatten();
+
+            results.push(extensions);    // save extensions
+            spark = spent.connect_loop(feedback);
         }
 
         spark.concatenate(results)

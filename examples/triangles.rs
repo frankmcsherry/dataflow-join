@@ -1,9 +1,7 @@
-#![feature(core)]
-#![feature(str_words)]
+#![feature(scoped)]
 
 extern crate mmap;
 extern crate time;
-extern crate core;
 extern crate timely;
 extern crate columnar;
 extern crate dataflow_join;
@@ -16,14 +14,14 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::thread;
 
-use core::cmp::Ordering::*;
+use std::cmp::Ordering::*;
 
 use dataflow_join::*;
 use dataflow_join::graph::{GraphTrait, GraphMMap, GraphExtenderExt, gallop};
 
 use timely::progress::scope::Scope;
 use timely::progress::nested::Summary::Local;
-use timely::progress::nested::product::Product;
+use timely::progress::timestamp::RootTimestamp;
 use timely::example_static::*;
 
 use timely::communication::*;
@@ -31,7 +29,7 @@ use timely::communication::pact::Pipeline;
 
 
 static USAGE: &'static str = "
-Usage: triangles dataflow <source> <workers> <stepsize> [--inspect] [--interactive]
+Usage: triangles dataflow <source> <workers> <stepsize> [--inspect] [--interactive] [--alt]
        triangles autorun <source> <workers> <stepsize>
        triangles compute <source>
        triangles help
@@ -45,6 +43,7 @@ fn main () {
     if args.get_bool("dataflow") {
         let inspect = args.get_bool("--inspect");
         let interactive = args.get_bool("--interactive");
+        let alt = args.get_bool("--alt");
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
                       else { panic!("invalid setting for workers: {}", args.get_str("<workers>")) };
         let stepsize = if let Ok(size) = args.get_str("<stepsize>").parse() { size }
@@ -53,7 +52,7 @@ fn main () {
                     workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
         let source = args.get_str("<source>");
 
-        triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive, stepsize);
+        triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive, stepsize, alt);
     }
     if args.get_bool("autorun") {
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
@@ -120,18 +119,18 @@ fn intersect<E: Ord>(mut aaa: &[E], mut bbb: &[E]) -> u64 {
 }
 
 
-fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool, step_size: u64)
+fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool, step_size: u64, alt: bool)
 where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
     let mut guards = Vec::new();
     let loader = &loader;
     for communicator in communicators.into_iter() {
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles(communicator, loader, inspect, interactive, step_size))
+                                          .scoped(move || triangles(communicator, loader, inspect, interactive, step_size, alt))
                                           .unwrap());
     }
 }
 
-fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool, step_size: u64)
+fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool, step_size: u64, alt: bool)
 where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
     let comm_index = communicator.index();
     let comm_peers = communicator.peers();
@@ -144,6 +143,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         let mut builder = root.new_subgraph();
         let (input, stream) = builder.new_input::<u32>();
 
+        if !alt {
         // extend u32s to pairs, then pairs to triples.
         let triangles = builder.enable(&stream)
                                .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
@@ -151,9 +151,19 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
                                .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                             &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-        if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+            // if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+        }
+        else {
+            // extend u32s to pairs, then pairs to triples.
+            let triangles = builder.enable(&stream)
+                                   .extend2(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                                   .extend2(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
+                                                 &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-        input        
+             // if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+        }
+
+        input
     };
 
     if interactive {
@@ -162,15 +172,15 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         for index in (0..) {
             stdinput.read_line(&mut line).unwrap();
             let start = time::precise_time_ns();
-            if let Some(word) = line.words().next() {
+            if let Some(word) = line.split_whitespace().next() {
                 let read = word.parse();
                 if let Ok(number) = read {
-                    input.send_messages(&Product::new((), index as u64), vec![number]);
+                    input.send_messages(&RootTimestamp::new(index as u64), vec![number]);
                 }
             }
             line.clear();
 
-            input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
+            input.advance(&RootTimestamp::new(index as u64), &RootTimestamp::new(index as u64 + 1));
             for _ in (0..5) { root.step(); }
 
             println!("elapsed: {:?}us", (time::precise_time_ns() - start)/1000);
@@ -187,12 +197,12 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
                            .filter(|&x| x < nodes)
                            .map(|x| x as u32)
                            .collect();
-            input.send_messages(&Product::new((), index as u64), data);
-            input.advance(&Product::new((), index as u64), &Product::new((), index as u64 + 1));
+            input.send_messages(&RootTimestamp::new(index as u64), data);
+            input.advance(&RootTimestamp::new(index as u64), &RootTimestamp::new(index as u64 + 1));
             root.step();
         }
 
-        input.close_at(&Product::new((), limit as u64));
+        input.close_at(&RootTimestamp::new(limit as u64));
         while root.step() { }
     }
 }
@@ -224,15 +234,15 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
 
         let mut builder = root.new_subgraph::<u64>();
 
-        let (feedback, stream) = builder.loop_variable(Product::new((), nodes + 1), Local(1));
+        let (feedback, stream) = builder.loop_variable(RootTimestamp::new(nodes + 1), Local(1));
 
         stream.enable(&mut builder)
-              .unary_notify(Pipeline, format!("Input"), vec![Product::new((), 0)], move |handle| {
-                  if let Some((time, _count)) = handle.notificator.next() {
+              .unary_notify(Pipeline, format!("Input"), vec![RootTimestamp::new(0)], move |_, output, notificator| {
+                  if let Some((time, _count)) = notificator.next() {
                       if time.inner < (nodes / batch) {
-                          handle.notificator.notify_at(&Product::new((), time.inner + 1));
+                          notificator.notify_at(&RootTimestamp::new(time.inner + 1));
                       }
-                      let mut session = handle.output.session(&time);
+                      let mut session = output.session(&time);
                       for next in (0..(batch/peers)) {
                           session.give(time.inner * batch + next * peers + index);
                       }
