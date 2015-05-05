@@ -19,9 +19,9 @@ use std::cmp::Ordering::*;
 use dataflow_join::*;
 use dataflow_join::graph::{GraphTrait, GraphMMap, GraphExtenderExt, gallop};
 
+use timely::progress::timestamp::RootTimestamp;
 use timely::progress::scope::Scope;
 use timely::progress::nested::Summary::Local;
-use timely::progress::timestamp::RootTimestamp;
 use timely::example_static::*;
 
 use timely::communication::*;
@@ -132,10 +132,10 @@ where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+S
 
 fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool, step_size: u64, alt: bool)
 where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
-    let comm_index = communicator.index();
-    let comm_peers = communicator.peers();
+    let index = communicator.index();
+    let peers = communicator.peers();
 
-    let graph = Rc::new(RefCell::new(loader(comm_index, comm_peers)));
+    let graph = Rc::new(RefCell::new(loader(index, peers)));
 
     let mut root = GraphRoot::new(communicator);
     let mut input = { // new scope to avoid long borrow on root
@@ -151,7 +151,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
                                .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                             &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-            // if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+            if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
         }
         else {
             // extend u32s to pairs, then pairs to triples.
@@ -160,7 +160,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
                                    .extend2(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                                  &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-             // if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+             if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
         }
 
         input
@@ -169,40 +169,36 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
     if interactive {
         let mut stdinput = stdin();
         let mut line = String::new();
-        for index in (0..) {
+        for round in (0..) {
             stdinput.read_line(&mut line).unwrap();
             let start = time::precise_time_ns();
             if let Some(word) = line.split_whitespace().next() {
                 let read = word.parse();
                 if let Ok(number) = read {
-                    input.send_messages(&RootTimestamp::new(index as u64), vec![number]);
+                    input.send_at(round, vec![number].into_iter());
                 }
             }
             line.clear();
 
-            input.advance(&RootTimestamp::new(index as u64), &RootTimestamp::new(index as u64 + 1));
+            input.advance_to(round + 1);
             for _ in (0..5) { root.step(); }
 
             println!("elapsed: {:?}us", (time::precise_time_ns() - start)/1000);
         }
     }
     else {
-        let step = step_size as usize;
-        let nodes = graph.borrow().nodes() - 1;
-        let limit = (nodes / step) + 1;
-        for index in (0..limit) {
-            let index = index as usize;
-            let data = ((index * step) .. ((index + 1) * step))
-                           .filter(|&x| x as u64 % comm_peers == comm_index)
-                           .filter(|&x| x < nodes)
-                           .map(|x| x as u32)
-                           .collect();
-            input.send_messages(&RootTimestamp::new(index as u64), data);
-            input.advance(&RootTimestamp::new(index as u64), &RootTimestamp::new(index as u64 + 1));
+        let nodes = graph.borrow().nodes() as u64 - 1;
+        let limit = (nodes / step_size) + 1;
+        for round in (0..limit) {
+            input.send_at(round, (0..step_size).map(|x| x + round * step_size)
+                                               .filter(|&x| x % peers == index)
+                                               .filter(|&x| x < nodes)
+                                               .map(|x| x as u32));
+            input.advance_to(round + 1);
             root.step();
         }
 
-        input.close_at(&RootTimestamp::new(limit as u64));
+        input.close();
         while root.step() { }
     }
 }

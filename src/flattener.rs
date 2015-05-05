@@ -1,5 +1,6 @@
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 
 use timely::progress::nested::subgraph::Source::ScopeOutput;
 use timely::progress::nested::subgraph::Target::ScopeInput;
@@ -36,7 +37,7 @@ impl<G: GraphBuilder, P: Data, E: Data> FlattenerExt<G, P, E> for ActiveStream<G
 }
 
 pub struct FlattenerScope<T: Timestamp, P: Data, E: Data> {
-    input:      PullableHelper<T, (P,Vec<E>), Rc<RefCell<Vec<(T, Vec<(P, Vec<E>)>)>>>>,
+    input:      PullableHelper<T, (P,Vec<E>), Rc<RefCell<VecDeque<(T, Vec<(P, Vec<E>)>)>>>>,
     output1:    ObserverHelper<OutputPort<T, (P, E)>>,
     output2:    ObserverHelper<OutputPort<T, Vec<E>>>,
     stash:      Vec<Vec<E>>,
@@ -44,7 +45,7 @@ pub struct FlattenerScope<T: Timestamp, P: Data, E: Data> {
 }
 
 impl<T: Timestamp, P: Data, E: Data> FlattenerScope<T, P, E> {
-    pub fn new(receiver: PactPullable<T, (P, Vec<E>), Rc<RefCell<Vec<(T, Vec<(P, Vec<E>)>)>>>>,
+    pub fn new(receiver: PactPullable<T, (P, Vec<E>), Rc<RefCell<VecDeque<(T, Vec<(P, Vec<E>)>)>>>>,
                output1: OutputPort<T, (P, E)>,
                output2: OutputPort<T, Vec<E>>) -> FlattenerScope<T, P, E> {
         FlattenerScope {
@@ -71,15 +72,15 @@ impl<T: Timestamp, P: Data, E: Data> Scope<T> for FlattenerScope<T, P, E> {
 
         while let Some((time, pairs)) = self.input.pull() {
             let mut session = self.output1.session(&time);
-            for (prefix, mut extensions) in pairs.drain() {
-                for extension in extensions.drain() {
+            for (prefix, mut extensions) in pairs.drain(..) {
+                for extension in extensions.drain(..) {
                     session.give((prefix.clone(), extension));
                 }
 
                 self.stash.push(extensions);
             }
             // self.counter += self.stash.len() as u64;
-            self.output2.give_at(&time, self.stash.drain());
+            self.output2.give_at(&time, self.stash.drain(..));
         }
         // println!("stashed: {}", self.counter);
 
