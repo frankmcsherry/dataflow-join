@@ -1,5 +1,5 @@
-#![feature(scoped)]
-#![feature(collections)]
+// #![feature(scoped)]
+// #![feature(collections)]
 
 extern crate mmap;
 extern crate time;
@@ -33,26 +33,26 @@ fn main () {
     let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
                   else { panic!("invalid setting for workers: {}", args.get_str("<workers>")) };
     println!("starting pagerank dataflow with {:?} worker{}", workers, if workers == 1 { "" } else { "s" });
-    let source = args.get_str("<source>");
+    let source = args.get_str("<source>").to_owned();
 
-    pagerank_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source));
+    pagerank_multi(ProcessCommunicator::new_vector(workers), source);
 }
 
-fn pagerank_multi<C, G, F>(communicators: Vec<C>, loader: F)
-where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
+fn pagerank_multi<C>(communicators: Vec<C>, filename: String)
+where C: Communicator+Send {
     let mut guards = Vec::new();
-    let loader = &loader;
     for communicator in communicators.into_iter() {
+        let filename = filename.clone();
         guards.push(thread::Builder::new().name(format!("timely worker {}", communicator.index()))
-                                          .scoped(move || pagerank(communicator, loader))
+                                          .spawn(move || pagerank(communicator, filename))
                                           .unwrap());
     }
+
+    for guard in guards { guard.join().unwrap(); }
 }
 
-fn pagerank<C, G, F>(communicator: C, loader: &F)
-where C: Communicator,
-      G: GraphTrait<Target=u32>,
-      F: Fn(u64, u64)->G {
+fn pagerank<C>(communicator: C, filename: String)
+where C: Communicator {
     let index = communicator.index() as usize;
     let peers = communicator.peers() as usize;
 
@@ -65,7 +65,7 @@ where C: Communicator,
         // 20 iterations, each time around += 1.
         let (helper, stream) = builder.loop_variable::<(u32, f32)>(RootTimestamp::new(20), Local(1));
 
-        let graph = loader(index as u64, peers as u64);             // load up our graph data
+        let graph = GraphMMap::<u32>::new(&filename);
         let mut src = vec![1.0; graph.nodes() / peers as usize];    // local rank accumulation
         let mut dst = vec![0.0; graph.nodes()];                     // local rank accumulation
 
@@ -99,7 +99,8 @@ where C: Communicator,
                                              .filter(|&(_,f)| f != 0.0)
                                              .map(|(u,f)| (u as u32, f)));
 
-                    dst.resize(graph.nodes(), 0.0);
+                    // dst.resize(graph.nodes(), 0.0);
+                    for _ in 0..graph.nodes() { dst.push(0.0); }
 
                     println!("{}s", time::precise_time_s() - start);
                     start = time::precise_time_s();

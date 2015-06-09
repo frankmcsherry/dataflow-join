@@ -15,6 +15,7 @@ use timely::example_static::builder::*;
 use timely::example_static::unary::PullableHelper;
 use timely::example_static::stream::{ActiveStream, Stream};
 
+use timely::drain::DrainExt;
 
 pub trait FlattenerExt<G: GraphBuilder, P: Data, E: Data> {
     fn flatten(self) -> (Stream<G::Timestamp, (P, E)>, ActiveStream<G, Vec<E>>);
@@ -72,15 +73,15 @@ impl<T: Timestamp, P: Data, E: Data> Scope<T> for FlattenerScope<T, P, E> {
 
         while let Some((time, pairs)) = self.input.pull() {
             let mut session = self.output1.session(&time);
-            for (prefix, mut extensions) in pairs.drain(..) {
-                for extension in extensions.drain(..) {
+            for (prefix, mut extensions) in pairs.drain_temp() {
+                for extension in extensions.drain_temp() {
                     session.give((prefix.clone(), extension));
                 }
 
                 self.stash.push(extensions);
             }
             // self.counter += self.stash.len() as u64;
-            self.output2.give_at(&time, self.stash.drain(..));
+            self.output2.give_at(&time, self.stash.drain_temp());
         }
         // println!("stashed: {}", self.counter);
 

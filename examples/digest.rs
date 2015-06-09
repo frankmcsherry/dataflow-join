@@ -34,7 +34,7 @@ fn livejournal(filename: &str) -> Vec<(u32, u32)> {
     for readline in file.lines() {
         let line = readline.ok().expect("read error");
         if !line.starts_with('#') {
-            let elts: Vec<&str> = line[..].split_whitespace().collect();
+            let elts: Vec<&str> = line[..].split(" ").collect();
             let src: u32 = elts[0].parse().ok().expect("malformed src");
             let dst: u32 = elts[1].parse().ok().expect("malformed dst");
             if src < dst { graph.push((src, dst)) }

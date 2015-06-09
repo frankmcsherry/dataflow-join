@@ -1,4 +1,4 @@
-#![feature(scoped)]
+// #![feature(scoped)]
 
 extern crate mmap;
 extern crate time;
@@ -50,9 +50,9 @@ fn main () {
                       else { panic!("invalid setting for stepsize: {}", args.get_str("<stepsize>")) };
         println!("starting triangles dataflow with {:?} worker{}; inspection: {:?}, interactive: {:?}",
                     workers, if workers == 1 { "" } else { "s" }, inspect, interactive);
-        let source = args.get_str("<source>");
+        let source = args.get_str("<source>").to_owned();
 
-        triangles_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), inspect, interactive, stepsize, alt);
+        triangles_multi(ProcessCommunicator::new_vector(workers), source, inspect, interactive, stepsize, alt);
     }
     if args.get_bool("autorun") {
         let workers = if let Ok(threads) = args.get_str("<workers>").parse() { threads }
@@ -61,8 +61,8 @@ fn main () {
                     else { panic!("invalid setting for stepsize: {}", args.get_str("<stepsize>")) };
         println!("starting triangles dataflow with {:?} worker{}; autorun",
                     workers, if workers == 1 { "" } else { "s" });
-        let source = args.get_str("<source>");
-        triangles_auto_multi(ProcessCommunicator::new_vector(workers), |_, _| GraphMMap::new(&source), stepsize);
+        let source = args.get_str("<source>").to_owned();
+        triangles_auto_multi(ProcessCommunicator::new_vector(workers), source, stepsize);
     }
     if args.get_bool("compute") {
         let source = args.get_str("<source>");
@@ -119,23 +119,25 @@ fn intersect<E: Ord>(mut aaa: &[E], mut bbb: &[E]) -> u64 {
 }
 
 
-fn triangles_multi<C, G, F>(communicators: Vec<C>, loader: F, inspect: bool, interactive: bool, step_size: u64, alt: bool)
-where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
+fn triangles_multi<C>(communicators: Vec<C>, filename: String, inspect: bool, interactive: bool, step_size: u64, alt: bool)
+where C: Communicator+Send {
     let mut guards = Vec::new();
-    let loader = &loader;
     for communicator in communicators.into_iter() {
+        let filename = filename.clone();
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles(communicator, loader, inspect, interactive, step_size, alt))
+                                          .spawn(move || triangles(communicator, filename, inspect, interactive, step_size, alt))
                                           .unwrap());
     }
+
+    for guard in guards { guard.join().unwrap(); }
 }
 
-fn triangles<C, G, F>(communicator: C, loader: &F, inspect: bool, interactive: bool, step_size: u64, alt: bool)
-where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
+fn triangles<C>(communicator: C, filename: String, inspect: bool, interactive: bool, step_size: u64, alt: bool)
+where C: Communicator {
     let index = communicator.index();
     let peers = communicator.peers();
 
-    let graph = Rc::new(RefCell::new(loader(index, peers)));
+    let graph = Rc::new(RefCell::new(GraphMMap::<u32>::new(&filename)));
 
     let mut root = GraphRoot::new(communicator);
     let mut input = { // new scope to avoid long borrow on root
@@ -172,7 +174,7 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
         for round in (0..) {
             stdinput.read_line(&mut line).unwrap();
             let start = time::precise_time_ns();
-            if let Some(word) = line.split_whitespace().next() {
+            if let Some(word) = line.split(" ").next() {
                 let read = word.parse();
                 if let Ok(number) = read {
                     input.send_at(round, vec![number].into_iter());
@@ -204,24 +206,26 @@ where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
 }
 
 
-fn triangles_auto_multi<C, G, F>(communicators: Vec<C>, loader: F, step_size: u64)
-where C: Communicator+Send, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G+Send+Sync {
+fn triangles_auto_multi<C>(communicators: Vec<C>, filename: String, step_size: u64)
+where C: Communicator+Send {
     let mut guards = Vec::new();
-    let loader = &loader;
     for communicator in communicators.into_iter() {
+        let filename = filename.clone();
         guards.push(thread::Builder::new().name(format!("worker thread {}", communicator.index()))
-                                          .scoped(move || triangles_auto(communicator, loader, step_size))
+                                          .spawn(move || triangles_auto(communicator, filename, step_size))
                                           .unwrap());
     }
+
+    for guard in guards { guard.join().unwrap(); }
 }
 
-fn triangles_auto<C, G, F>(communicator: C, loader: &F, step_size: u64)
-where C: Communicator, G: GraphTrait<Target=u32>, F: Fn(u64, u64)->G {
+fn triangles_auto<C>(communicator: C, filename: String, step_size: u64)
+where C: Communicator {
     let index = communicator.index();
     let peers = communicator.peers();
 
     let batch = step_size;
-    let graph = Rc::new(RefCell::new(loader(index, peers)));
+    let graph = Rc::new(RefCell::new(GraphMMap::<u32>::new(&filename)));
     let nodes = graph.borrow().nodes() as u64;
 
     let mut root = GraphRoot::new(communicator);

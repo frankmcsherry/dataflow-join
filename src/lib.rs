@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-#![feature(collections)]
-#![feature(collections_drain)]
+// #![feature(collections)]
+// #![feature(collections_drain)]
 // #![feature(core)]
 
 extern crate columnar;
@@ -17,6 +17,8 @@ use timely::progress::nested::Summary::Local;
 use timely::example_static::*;
 use timely::communication::pact::{Pipeline, Exchange};
 use timely::communication::*;
+
+use timely::drain::DrainExt;
 
 use columnar::Columnar;
 
@@ -86,7 +88,7 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         stream.unary_stream(exch, format!("Count"), move |input, output| {
             let extender = clone.borrow();
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain(..).filter_map(|(p,c,i)| {
+                output.give_at(&time, data.drain_temp().filter_map(|(p,c,i)| {
                     let nc = extender.count(&p);
                     if nc > c { Some((p,c,i)) }
                     else      { if nc > 0 { Some((p,nc,ident)) } else { None } }
@@ -102,7 +104,7 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         stream.unary_stream(exch, format!("Propose"), move |input, output| {
             let extender = clone.borrow();
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain(..).map(|p| {
+                output.give_at(&time, data.drain_temp().map(|p| {
                     let mut vec = Vec::new();
                     extender.propose(&p, &mut vec);
                     (p, vec)
@@ -117,9 +119,9 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         let exch = Exchange::new(move |x| func(x));
         stream.binary_stream(other, exch, Pipeline, format!("Propose"), move |input1, input2, output| {
             let extender = clone.borrow();
-            while let Some((_time, mut vec)) = input2.pull() { stash.append(&mut vec); }
+            while let Some((_time, mut vec)) = input2.pull() { stash.extend(vec.drain_temp()); }
             while let Some((time, data)) = input1.pull() {
-                output.give_at(&time, data.drain(..).map(|p| {
+                output.give_at(&time, data.drain_temp().map(|p| {
                     let mut vec = stash.pop().unwrap_or(Vec::new());
                     extender.propose(&p, &mut vec);
                     (p, vec)
@@ -134,7 +136,7 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
         stream.unary_stream(exch, format!("Intersect"), move |input, output| {
             let extender = clone.borrow();
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain(..).filter_map(|(prefix, mut extensions)| {
+                output.give_at(&time, data.drain_temp().filter_map(|(prefix, mut extensions)| {
                     extender.intersect(&prefix, &mut extensions);
                     if extensions.len() > 0 { Some((prefix, extensions)) } else { None }
                     // Some((prefix, extensions))   // don't drop extensions in --alt

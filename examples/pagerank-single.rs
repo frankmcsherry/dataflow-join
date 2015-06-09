@@ -38,7 +38,7 @@ fn pagerank<G: GraphTrait<Target=u32>>(graph: &G, iterations: usize) {
                 dst[edge as usize] += value;
             }
         }
-        for node in 0..src.len() { src[node] = dst[node]; dst[node] = 0; }
+        for node in 0..src.len() { src[node] = dst[node]; dst[node] = 0.0; }
 
         println!("{}s", time::precise_time_s() - start);
         start = time::precise_time_s();
