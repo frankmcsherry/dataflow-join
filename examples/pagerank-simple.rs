@@ -188,7 +188,7 @@ where C: Communicator {
 
                     let mut count = 0;
                     for x in &acc { if *x != 0.0 { count += 1; } }
-                    println!("about to send {} non-zero elements: ({} bytes)", count, 8 * count);
+                    println!("about to send {} non-zero elements of {}: ({} bytes)", count, acc.len(), 8 * count);
 
                     output.give_at(&item, acc.drain_temp().enumerate().filter(|x| x.1 != 0.0)
                                              .map(|(u,f)| (((u * workers + local_index) as u32), f)));
