@@ -23,7 +23,7 @@ fn main() {
     let _target = args.get_str("<target>");
     let mut graph = livejournal(&source);
     organize_graph(&mut graph);
-    // _digest_graph_vector(&_extract_fragment(&graph, 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
+    _digest_graph_vector(&_extract_fragment(graph.iter().map(|x| *x), 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
 
 }
 
@@ -84,11 +84,11 @@ fn redirect(edges: &mut Vec<(u32, u32)>) {
 }
 
 
-fn _extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVector<u32> {
+fn _extract_fragment<I: Iterator<Item=(u32, u32)>>(graph: I, index: u64, parts: u64) -> GraphVector<u32> {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
-    for &(src,dst) in graph {
+    for (src, dst) in graph {
         if src as u64 % parts == index {
             while src + 1 >= nodes.len() as u32 { nodes.push(0); }
             while dst + 1 >= nodes.len() as u32 { nodes.push(0); } // allows unsafe access to nodes
