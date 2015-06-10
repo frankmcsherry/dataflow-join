@@ -145,6 +145,10 @@ where C: Communicator {
                         }
                     }
                     // \------ end familiar part ------/
+
+                    let mut updates = 0u64;
+                    for d in dst.iter() { if *d != 0.0 { updates += 1; } }
+
                     output.give_at(&iter, dst.drain_temp()
                                              .enumerate()
                                              .filter(|&(_,f)| f != 0.0)
@@ -152,7 +156,7 @@ where C: Communicator {
 
                     for _ in 0..graph.nodes() { dst.push(0.0); }
 
-                    println!("iteration {:?}: {}s; processed {} edges", iter, time::precise_time_s() - start, counter);
+                    println!("iteration {:?}: {}s; {} edges; {} updates", iter, time::precise_time_s() - start, counter, updates);
                     start = time::precise_time_s();
                 }
 
