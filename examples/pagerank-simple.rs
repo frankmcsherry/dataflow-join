@@ -121,29 +121,29 @@ where C: Communicator {
         let mut src = vec![1.0; nodes / peers as usize];    // local rank accumulation
         let mut dst = vec![0.0; nodes];                     // local rank accumulation
 
-        for node in 0..graph.nodes() {
-            for &b in graph.edges(node) {
-                dst[b as usize] = 1.0;
-            }
-        }
-
-        let mut count = 0;
-        for x in &dst { if *x != 0.0 { count += 1; } }
-        println!("can reach {} elements of {}", count, dst.len());
-
-        for node in 0..graph.nodes() {
-            if node % peers == index {
-                for &b in graph.edges(node) {
-                    dst[b as usize] = 1.0;
-                }
-            }
-        }
-
-        let mut count = 0;
-        for x in &dst { if *x != 0.0 { count += 1; } }
-        println!("can reach {} elements of {} locally", count, dst.len());
-
-        let mut dst = vec![0.0; nodes];                     // local rank accumulation
+        // for node in 0..graph.nodes() {
+        //     for &b in graph.edges(node) {
+        //         dst[b as usize] = 1.0;
+        //     }
+        // }
+        //
+        // let mut count = 0;
+        // for x in &dst { if *x != 0.0 { count += 1; } }
+        // println!("can reach {} elements of {}", count, dst.len());
+        //
+        // for node in 0..graph.nodes() {
+        //     if node % peers == index {
+        //         for &b in graph.edges(node) {
+        //             dst[b as usize] = 1.0;
+        //         }
+        //     }
+        // }
+        //
+        // let mut count = 0;
+        // for x in &dst { if *x != 0.0 { count += 1; } }
+        // println!("can reach {} elements of {} locally", count, dst.len());
+        //
+        // let mut dst = vec![0.0; nodes];                     // local rank accumulation
 
         let mut start = time::precise_time_s();
 
@@ -170,9 +170,9 @@ where C: Communicator {
                         }
                     }
 
-                    let mut count = 0;
-                    for x in &dst { if *x != 0.0 { count += 1; } }
-                    println!("about to send {} non-zero elements of {}: ({} bytes)", count, dst.len(), 8 * count);
+                    // let mut count = 0;
+                    // for x in &dst { if *x != 0.0 { count += 1; } }
+                    // println!("about to send {} non-zero elements of {}: ({} bytes)", count, dst.len(), 8 * count);
 
 
                     // \------ end familiar part ------/
