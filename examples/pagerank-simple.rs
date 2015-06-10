@@ -26,12 +26,8 @@ use timely::networking::initialize_networking_from_file;
 
 use timely::drain::DrainExt;
 
-// static USAGE: &'static str = "
-// Usage: pagerank <source> <workers>
-// ";
-
 static USAGE: &'static str = "
-Usage: scc <source> [options] [<arguments>...]
+Usage: pagerank <source> [options] [<arguments>...]
 
 Options:
     -w <arg>, --workers <arg>    number of workers per process [default: 1]
@@ -121,30 +117,6 @@ where C: Communicator {
         let mut src = vec![1.0; nodes / peers as usize];    // local rank accumulation
         let mut dst = vec![0.0; nodes];                     // local rank accumulation
 
-        // for node in 0..graph.nodes() {
-        //     for &b in graph.edges(node) {
-        //         dst[b as usize] = 1.0;
-        //     }
-        // }
-        //
-        // let mut count = 0;
-        // for x in &dst { if *x != 0.0 { count += 1; } }
-        // println!("can reach {} elements of {}", count, dst.len());
-        //
-        // for node in 0..graph.nodes() {
-        //     if node % peers == index {
-        //         for &b in graph.edges(node) {
-        //             dst[b as usize] = 1.0;
-        //         }
-        //     }
-        // }
-        //
-        // let mut count = 0;
-        // for x in &dst { if *x != 0.0 { count += 1; } }
-        // println!("can reach {} elements of {} locally", count, dst.len());
-        //
-        // let mut dst = vec![0.0; nodes];                     // local rank accumulation
-
         let mut start = time::precise_time_s();
 
         // from feedback, place an operator that
@@ -163,11 +135,13 @@ where C: Communicator {
                         src[node] = 0.15 + 0.85 * src[node];
                     }
 
+                    let mut counter = 0;
                     for node in 0..src.len() {
                         let edges = graph.edges(index + peers * node);
                         let value = src[node] / edges.len() as f32;
                         for &b in edges {
                             dst[b as usize] += value;
+                            counter += 1;
                         }
                     }
                     // \------ end familiar part ------/
@@ -178,7 +152,7 @@ where C: Communicator {
 
                     for _ in 0..graph.nodes() { dst.push(0.0); }
 
-                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
+                    println!("iteration {:?}: {}s; processed {} edges", iter, time::precise_time_s() - start, counter);
                     start = time::precise_time_s();
                 }
 
