@@ -150,7 +150,7 @@ where C: Communicator {
                                              .filter(|&(_,f)| f != 0.0)
                                              .map(|(u,f)| (u as u32, f)));
 
-                    for _ in 0..graph.nodes() { dst.push(0.0); }
+                    for _ in 0..(graph.nodes() + 1) { dst.push(0.0); }
 
                     println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
@@ -170,28 +170,28 @@ where C: Communicator {
         let mut acc = vec![0.0; 1 + (nodes / workers)];
 
         ranks
-        // .unary_notify(
-        //     Exchange::new(move |x: &(u32, f32)| (workers * (index / workers)) as u64 + (x.0 as u64 % workers as u64)),
-        //     format!("Aggregation"),
-        //     vec![],
-        //     move |input, output, iterator| {
-        //         while let Some((iter, data)) = input.pull() {
-        //             iterator.notify_at(&iter);
-        //             for (node, rank) in data.drain_temp() {
-        //                 acc[node as usize / workers] += rank;
-        //             }
-        //         }
-        //
-        //         while let Some((item, _)) = iterator.next() {
-        //
-        //             output.give_at(&item, acc.drain_temp().enumerate().filter(|x| x.1 != 0.0)
-        //                                      .map(|(u,f)| (((u * workers + local_index) as u32), f)));
-        //
-        //             for _ in 0..(nodes/workers) { acc.push(0.0); }
-        //             assert!(acc.len() == nodes/workers);
-        //         }
-        //     }
-        // )
+        .unary_notify(
+            Exchange::new(move |x: &(u32, f32)| (workers * (index / workers)) as u64 + (x.0 as u64 % workers as u64)),
+            format!("Aggregation"),
+            vec![],
+            move |input, output, iterator| {
+                while let Some((iter, data)) = input.pull() {
+                    iterator.notify_at(&iter);
+                    for (node, rank) in data.drain_temp() {
+                        acc[node as usize / workers] += rank;
+                    }
+                }
+
+                while let Some((item, _)) = iterator.next() {
+
+                    output.give_at(&item, acc.drain_temp().enumerate().filter(|x| x.1 != 0.0)
+                                             .map(|(u,f)| (((u * workers + local_index) as u32), f)));
+
+                    for _ in 0..(1 + (nodes/workers)) { acc.push(0.0); }
+                    assert!(acc.len() == nodes/workers);
+                }
+            }
+        )
         .connect_loop(helper);
     }
 
