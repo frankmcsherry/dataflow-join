@@ -188,7 +188,7 @@ where C: Communicator {
                                              .map(|(u,f)| (((u * workers + local_index) as u32), f)));
 
                     for _ in 0..(1 + (nodes/workers)) { acc.push(0.0); }
-                    assert!(acc.len() == nodes/workers);
+                    assert!(acc.len() == (1 + (nodes/workers)));
                 }
             }
         )
