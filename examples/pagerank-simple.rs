@@ -135,7 +135,7 @@ where C: Communicator {
                         src[node] = 0.15 + 0.85 * src[node];
                     }
 
-                    let mut counter = 0;
+                    let mut counter = 0u64;
                     for node in 0..src.len() {
                         let edges = graph.edges(index + peers * node);
                         let value = src[node] / edges.len() as f32;
