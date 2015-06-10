@@ -157,6 +157,7 @@ where C: Communicator {
             move |input, output, iterator| {                // 4. provide the operator logic
 
                 while let Some((iter, _)) = iterator.next() {
+
                     // /---- should look familiar! ----\
                     for node in 0..src.len() {
                         src[node] = 0.15 + 0.85 * src[node];
@@ -169,22 +170,15 @@ where C: Communicator {
                             dst[b as usize] += value;
                         }
                     }
-
-                    // let mut count = 0;
-                    // for x in &dst { if *x != 0.0 { count += 1; } }
-                    // println!("about to send {} non-zero elements of {}: ({} bytes)", count, dst.len(), 8 * count);
-
-
                     // \------ end familiar part ------/
                     output.give_at(&iter, dst.drain_temp()
                                              .enumerate()
                                              .filter(|&(_,f)| f != 0.0)
                                              .map(|(u,f)| (u as u32, f)));
 
-                    // dst.resize(graph.nodes(), 0.0);
                     for _ in 0..graph.nodes() { dst.push(0.0); }
 
-                    println!("{}s", time::precise_time_s() - start);
+                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
