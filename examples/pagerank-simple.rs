@@ -114,8 +114,8 @@ where C: Communicator {
 
         let nodes = graph.nodes();
 
-        let mut src = vec![1.0; nodes / peers as usize];    // local rank accumulation
-        let mut dst = vec![0.0; nodes];                     // local rank accumulation
+        let mut src = vec![1.0; 1 + (nodes / peers as usize)];  // local rank accumulation
+        let mut dst = vec![0.0; nodes];                         // local rank accumulation
 
         let mut start = time::precise_time_s();
 
@@ -141,13 +141,9 @@ where C: Communicator {
                         let value = src[node] / edges.len() as f32;
                         for &b in edges {
                             dst[b as usize] += value;
-                            counter += 1;
                         }
                     }
                     // \------ end familiar part ------/
-
-                    let mut updates = 0u64;
-                    for d in dst.iter() { if *d != 0.0 { updates += 1; } }
 
                     output.give_at(&iter, dst.drain_temp()
                                              .enumerate()
@@ -156,7 +152,7 @@ where C: Communicator {
 
                     for _ in 0..graph.nodes() { dst.push(0.0); }
 
-                    println!("iteration {:?}: {}s; {} edges; {} updates", iter, time::precise_time_s() - start, counter, updates);
+                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
