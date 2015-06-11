@@ -11,6 +11,7 @@ extern crate docopt;
 use docopt::Docopt;
 
 use std::thread;
+use std::mem;
 
 use dataflow_join::graph::{GraphTrait, GraphMMap};
 
@@ -115,6 +116,7 @@ where C: Communicator {
         let nodes = graph.nodes();
 
         let mut src = vec![1.0; 1 + (nodes / peers as usize)];  // local rank accumulation
+        let mut tmp = vec![1.0; 1 + (nodes / peers as usize)];  // local rank accumulation
         // let mut dst = vec![0.0; nodes];                         // local rank accumulation
 
         let mut start = time::precise_time_s();
@@ -130,33 +132,40 @@ where C: Communicator {
 
                 while let Some((iter, _)) = iterator.next() {
 
-                    let mut session = output.session(&iter);
+                    mem::swap(&mut src, &mut tmp);
+
 
                     // /---- should look familiar! ----\
                     for node in 0..src.len() {
                         src[node] = 0.15 + 0.85 * src[node];
                     }
 
-                    let mut counter = 0u64;
-
                     for node in 0..src.len() {
+                        let mut session = output.session(&iter);
+
                         let edges = graph.edges(index + peers * node);
                         let value = src[node] / edges.len() as f32;
                         for &b in edges {
                             session.give((b, value));
-                            counter += 1;
+                        }
+
+                        if let Some((iter, data)) = input.pull() {
+                            iterator.notify_at(&iter);
+                            for (node, rank) in data.drain_temp() {
+                                tmp[node as usize / peers] += rank;
+                            }
                         }
                     }
                     // \------ end familiar part ------/
 
-                    println!("iteration {:?}: {}s; sent {} pairs", iter, time::precise_time_s() - start, counter);
+                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
                 while let Some((iter, data)) = input.pull() {
                     iterator.notify_at(&iter);
                     for (node, rank) in data.drain_temp() {
-                        src[node as usize / peers] += rank;
+                        tmp[node as usize / peers] += rank;
                     }
                 }
             }
