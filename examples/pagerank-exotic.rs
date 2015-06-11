@@ -137,16 +137,19 @@ where C: Communicator {
                         src[node] = 0.15 + 0.85 * src[node];
                     }
 
+                    let mut counter = 0u64;
+
                     for node in 0..src.len() {
                         let edges = graph.edges(index + peers * node);
                         let value = src[node] / edges.len() as f32;
                         for &b in edges {
                             session.give((b, value));
+                            counter += 1;
                         }
                     }
                     // \------ end familiar part ------/
 
-                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
+                    println!("iteration {:?}: {}s; sent {} pairs", iter, time::precise_time_s() - start, counter);
                     start = time::precise_time_s();
                 }
 
