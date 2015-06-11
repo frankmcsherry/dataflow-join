@@ -119,6 +119,8 @@ where C: Communicator {
         let mut tmp = vec![1.0; 1 + (nodes / peers as usize)];  // local rank accumulation
         // let mut dst = vec![0.0; nodes];                         // local rank accumulation
 
+        let mut buf = vec![];
+
         let mut start = time::precise_time_s();
 
         // from feedback, place an operator that
@@ -149,11 +151,13 @@ where C: Communicator {
                             session.give((b, value));
                         }
 
-                        if let Some((iter, data)) = input.pull() {
+                        while let Some((iter, data)) = input.pull() {
                             iterator.notify_at(&iter);
-                            for (node, rank) in data.drain_temp() {
-                                tmp[node as usize / peers] += rank;
-                            }
+                            buf.extend(data.drain_temp());
+                        }
+
+                        for (node, rank) in buf.drain_temp() {
+                            tmp[node as usize / peers] += rank;
                         }
                     }
                     // \------ end familiar part ------/
