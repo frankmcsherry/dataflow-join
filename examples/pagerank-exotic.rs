@@ -142,23 +142,39 @@ where C: Communicator {
                         src[node] = 0.15 + 0.85 * src[node];
                     }
 
-                    for node in 0..src.len() {
-                        let mut session = output.session(&iter);
+                    let mut node = 0;
+                    let mut read = 0;
+                    let mut counter = 0;
 
-                        let edges = graph.edges(index + peers * node);
-                        let value = src[node] / edges.len() as f32;
-                        for &b in edges {
-                            session.give((b, value));
+                    while node < src.len() {
+
+                        let mut session = output.session(&iter);
+                        for _ in 0 .. std::cmp::min(1_000, src.len() - node) {
+
+                            let edges = graph.edges(index + peers * node);
+                            let value = src[node] / edges.len() as f32;
+                            for &b in edges {
+                                session.give((b, value));
+                            }
+
+                            counter += edges.len();
+                            node += 1;
                         }
 
                         while let Some((iter, data)) = input.pull() {
                             iterator.notify_at(&iter);
+                            read += data.len();
                             buf.extend(data.drain_temp());
+                            if read > counter { break; }
                         }
 
                         for (node, rank) in buf.drain_temp() {
                             tmp[node as usize / peers] += rank;
                         }
+
+                        // if (node % 100_000) == 0 {
+                        //     println!("status: {} node, {} counter, {} read, \tdefecit: {}", node, counter, read, counter as i64 - read as i64);
+                        // }
                     }
                     // \------ end familiar part ------/
 
