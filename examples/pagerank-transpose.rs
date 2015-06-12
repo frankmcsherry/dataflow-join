@@ -174,16 +174,25 @@ where C: Communicator {
                         src[node] = 0.15 + 0.85 * src[node] / deg[node] as f32;
                     }
 
-                    let mut session = output.session(&iter);
-
+                    let mut index = 0;
                     let mut slice = &edges[..];
-                    for &(dst, deg) in &rev {
-                        let mut accum = 0.0;
-                        for &s in &slice[..deg as usize] {
-                            accum += src[s as usize];
+                    while index < rev.len() {
+
+                        let mut session = output.session(&iter);
+
+                        for _ in 0..std::cmp::min(1_000, rev.len() - index) {
+
+                            let (dst, deg) = rev[index];
+
+                            let mut accum = 0.0;
+                            for &s in &slice[..deg as usize] {
+                                accum += src[s as usize];
+                            }
+                            slice = &slice[deg as usize..];
+                            session.give((dst, accum));
+
+                            index += 1;
                         }
-                        slice = &slice[deg as usize..];
-                        session.give((dst, accum));
                     }
 
                     for s in &mut src { *s = 0.0; }
