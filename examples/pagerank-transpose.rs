@@ -126,7 +126,7 @@ fn transpose(filename: String, index: usize, peers: usize) -> (Vec<u32>, Vec<(u3
 
         let len = rev.len();
         rev[len-1].1 += 1;
-        reversed.push(s);
+        reversed.push(s / peers);
     }
 
     return (deg, rev, reversed);
