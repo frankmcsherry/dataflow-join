@@ -176,7 +176,6 @@ where C: Communicator {
 
                     let mut session = output.session(&iter);
 
-                    let mut counter = 0;
                     let mut slice = &edges[..];
                     for &(dst, deg) in &rev {
                         let mut accum = 0.0;
@@ -185,12 +184,11 @@ where C: Communicator {
                         }
                         slice = &slice[deg as usize..];
                         session.give((dst, accum));
-                        counter += 1;
                     }
 
                     for s in &mut src { *s = 0.0; }
 
-                    println!("iteration {:?}: {}s; sent {} updates", iter, time::precise_time_s() - start, counter);
+                    println!("iteration {:?}: {}s; sent {} updates", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
