@@ -120,7 +120,7 @@ fn transpose(filename: String, index: usize, peers: usize) -> (Vec<u32>, Vec<(u3
     let mut reversed = vec![];
     for (d, s) in edges.drain_temp() {
         let len = rev.len();
-        if len == 0 || rev[len-1].1 < d {
+        if (len == 0) || (rev[len-1].0 < d) {
             rev.push((d, 0));
         }
 
@@ -152,7 +152,9 @@ where C: Communicator {
 
         let (deg, rev, edges) = transpose(filename, index, peers);
 
+
         println!("sorted {} edges; {}s", edges.len(), time::precise_time_s() - start);
+        println!("src: {}, rev: {}, edges: {}", deg.len(), rev.len(), edges.len());
         start = time::precise_time_s();
 
         let mut src = vec![0.0; deg.len()];
