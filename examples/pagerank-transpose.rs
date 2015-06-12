@@ -188,7 +188,7 @@ where C: Communicator {
 
                     for s in &mut src { *s = 0.0; }
 
-                    println!("iteration {:?}: {}s; sent {} updates", iter, time::precise_time_s() - start);
+                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
