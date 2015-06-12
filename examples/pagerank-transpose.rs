@@ -180,7 +180,7 @@ where C: Communicator {
 
                         let mut session = output.session(&iter);
 
-                        for _ in 0..std::cmp::min(1_000, rev.len() - index) {
+                        for _ in 0..std::cmp::min(100_000, rev.len() - index) {
 
                             let (dst, deg) = rev[index];
 
