@@ -150,7 +150,7 @@ where C: Communicator {
 
         let (deg, rev, edges) = transpose(filename, index, peers);
 
-        println!("sorted: {}s", time::precise_time_s() - start);
+        println!("sorted {} edges; {}s", edges.len(), time::precise_time_s() - start);
         start = time::precise_time_s();
 
         let mut src = vec![0.0; deg.len()];
@@ -172,6 +172,7 @@ where C: Communicator {
 
                     let mut session = output.session(&iter);
 
+                    let mut counter = 0;
                     let mut slice = &edges[..];
                     for &(dst, deg) in &rev {
                         let mut accum = 0.0;
@@ -180,11 +181,12 @@ where C: Communicator {
                         }
                         slice = &slice[deg as usize..];
                         session.give((dst, accum));
+                        counter += 1;
                     }
 
                     for s in &mut src { *s = 0.0; }
 
-                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
+                    println!("iteration {:?}: {}s; sent {} updates", iter, time::precise_time_s() - start, counter);
                     start = time::precise_time_s();
                 }
 
