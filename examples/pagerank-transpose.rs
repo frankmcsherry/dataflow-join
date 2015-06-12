@@ -11,6 +11,8 @@ extern crate docopt;
 use docopt::Docopt;
 
 use std::thread;
+use std::mem;
+use std::ptr;
 
 use dataflow_join::graph::{GraphTrait, GraphMMap};
 
@@ -100,25 +102,26 @@ fn transpose(filename: String, index: usize, peers: usize) -> (Vec<u32>, Vec<(u3
 
     let graph = GraphMMap::<u32>::new(&filename);
 
-    let mut edges = Vec::new();
+    let mut src = vec![];
+    let mut dst = vec![];
     let mut deg = vec![];
 
     for node in 0..graph.nodes() {
         if node % peers == index {
             deg.push(graph.edges(node).len() as u32);
             for &b in graph.edges(node) {
-                edges.push((b as u32, node as u32));
+                src.push((node / peers) as u32);
+                dst.push(b as u32);
             }
         }
     }
 
-    println!("slice {} of {} extracted {} edges", index, peers, edges.len());
+    // println!("slice {} of {} extracted {} edges", index, peers, edges.len());
 
-    edges.sort();
+    qsort_kv(&mut dst[..], &mut src[..]);
 
     let mut rev = vec![(0,0);0];
-    let mut reversed = vec![];
-    for (d, s) in edges.drain_temp() {
+    for d in dst.drain_temp() {
         let len = rev.len();
         if (len == 0) || (rev[len-1].0 < d) {
             rev.push((d, 0));
@@ -126,20 +129,20 @@ fn transpose(filename: String, index: usize, peers: usize) -> (Vec<u32>, Vec<(u3
 
         let len = rev.len();
         rev[len-1].1 += 1;
-        reversed.push(s / peers as u32);
     }
 
-    return (deg, rev, reversed);
+    return (deg, rev, src);
 }
 
-fn pagerank<C>(communicator: C, filename: String, workers: usize)
+fn pagerank<C>(communicator: C, filename: String, _workers: usize)
 where C: Communicator {
     let index = communicator.index() as usize;
     let peers = communicator.peers() as usize;
 
     let mut root = GraphRoot::new(communicator);
 
-
+    let mut start = time::precise_time_s();
+    let mut going = start;
 
     {   // new scope avoids long borrow on root
         let mut builder = root.new_subgraph();
@@ -148,15 +151,7 @@ where C: Communicator {
         // 20 iterations, each time around += 1.
         let (helper, stream) = builder.loop_variable::<(u32, f32)>(RootTimestamp::new(20), Local(1));
 
-        let mut start = time::precise_time_s();
-
         let (deg, rev, edges) = transpose(filename, index, peers);
-
-
-        println!("sorted {} edges; {}s", edges.len(), time::precise_time_s() - start);
-        println!("src: {}, rev: {}, edges: {}", deg.len(), rev.len(), edges.len());
-        start = time::precise_time_s();
-
         let mut src = vec![0.0; deg.len()];
 
         // from feedback, place an operator that
@@ -169,6 +164,16 @@ where C: Communicator {
             move |input, output, iterator| {                // 4. provide the operator logic
 
                 while let Some((iter, _)) = iterator.next() {
+
+                    if iter.inner == 10 {
+                        going = time::precise_time_s();
+                    }
+
+                    if iter.inner == 20 {
+                        if index == 0 {
+                            println!("average over 10 iters: {}", (time::precise_time_s() - going) / 10.0);
+                        }
+                    }
 
                     for node in 0..src.len() {
                         src[node] = 0.15 + 0.85 * src[node] / deg[node] as f32;
@@ -197,7 +202,7 @@ where C: Communicator {
 
                     for s in &mut src { *s = 0.0; }
 
-                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
+                    // println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
                     start = time::precise_time_s();
                 }
 
@@ -240,4 +245,73 @@ where C: Communicator {
     }
 
     while root.step() { }
+
+    if index == 0 {
+        println!("elapsed: {}", time::precise_time_s() - start);
+    }
+}
+
+
+pub fn qsort_kv<K: Ord, V>(keys: &mut [K], vals: &mut [V]) {
+    let mut work = vec![(keys, vals)];
+    while let Some((ks, vs)) = work.pop() {
+        if ks.len() < 16 { isort_kv(ks, vs); }
+        else {
+            let p = partition_kv(ks, vs);
+            let (ks1, ks2) = ks.split_at_mut(p);
+            let (vs1, vs2) = vs.split_at_mut(p);
+            work.push((&mut ks2[1..], &mut vs2[1..]));
+            work.push((ks1, vs1));
+        }
+    }
+}
+
+#[inline(always)]
+pub fn partition_kv<K: Ord, V>(keys: &mut [K], vals: &mut [V]) -> usize {
+
+    let pivot = keys.len() / 2;
+
+    let mut lower = 0;
+    let mut upper = keys.len() - 1;
+
+    unsafe {
+        while lower < upper {
+            // NOTE : Pairs are here to insulate against "same key" balance issues
+            while lower < upper && (keys.get_unchecked(lower),lower) <= (keys.get_unchecked(pivot),pivot) { lower += 1; }
+            while lower < upper && (keys.get_unchecked(pivot),pivot) <= (keys.get_unchecked(upper),upper) { upper -= 1; }
+            ptr::swap(keys.get_unchecked_mut(lower), keys.get_unchecked_mut(upper));
+            ptr::swap(vals.get_unchecked_mut(lower), vals.get_unchecked_mut(upper));
+        }
+    }
+
+    // we want to end up with xs[p] near lower.
+    if keys[lower] < keys[pivot] && lower < pivot { lower += 1; }
+    if keys[lower] > keys[pivot] && lower > pivot { lower -= 1; }
+    keys.swap(lower, pivot);
+    vals.swap(lower, pivot);
+    lower
+}
+
+
+// insertion sort
+pub fn isort_kv<K: Ord, V>(keys: &mut [K], vals: &mut [V]) {
+    for i in 1..keys.len() {
+        let mut j = i;
+        unsafe {
+            while j > 0 && keys.get_unchecked(j-1) > keys.get_unchecked(i) { j -= 1; }
+
+            // bulk shift the stuff we skipped over
+            let mut tmp_k: K = mem::uninitialized();
+            ptr::swap(&mut tmp_k, keys.get_unchecked_mut(i));
+            ptr::copy(keys.get_unchecked_mut(j), keys.get_unchecked_mut(j+1), i-j);
+            ptr::swap(&mut tmp_k, keys.get_unchecked_mut(j));
+            mem::forget(tmp_k);
+
+            let mut tmp_v: V = mem::uninitialized();
+            ptr::swap(&mut tmp_v, vals.get_unchecked_mut(i));
+            ptr::copy(vals.get_unchecked_mut(j), vals.get_unchecked_mut(j+1), i-j);
+            ptr::swap(&mut tmp_v, vals.get_unchecked_mut(j));
+            mem::forget(tmp_v);
+        }
+    }
 }
