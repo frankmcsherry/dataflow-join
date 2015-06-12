@@ -105,12 +105,14 @@ fn transpose(filename: String, index: usize, peers: usize) -> (Vec<u32>, Vec<(u3
 
     for node in 0..graph.nodes() {
         if node % peers == index {
-            deg.push(graph.edges(index + peers * node).len() as u32);
-            for &b in graph.edges(index + peers * node) {
+            deg.push(graph.edges(node).len() as u32);
+            for &b in graph.edges(node) {
                 edges.push((b as u32, node as u32));
             }
         }
     }
+
+    println!("slice {} of {} extracted {} edges", index, peers, edges.len());
 
     edges.sort();
 
