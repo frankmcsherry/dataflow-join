@@ -102,6 +102,8 @@ where C: Communicator {
     let peers = communicator.peers() as usize;
 
     let mut root = GraphRoot::new(communicator);
+    let mut start = time::precise_time_s();
+    let mut going = start;
 
     {   // new scope avoids long borrow on root
         let mut builder = root.new_subgraph();
@@ -117,7 +119,6 @@ where C: Communicator {
         let mut src = vec![1.0; 1 + (nodes / peers as usize)];  // local rank accumulation
         let mut dst = vec![0.0; nodes];                         // local rank accumulation
 
-        let mut start = time::precise_time_s();
 
         // from feedback, place an operator that
         // aggregates and broadcasts ranks along edges.
@@ -129,6 +130,16 @@ where C: Communicator {
             move |input, output, iterator| {                // 4. provide the operator logic
 
                 while let Some((iter, _)) = iterator.next() {
+
+                    if iter.inner == 10 {
+                        going = time::precise_time_s();
+                    }
+
+                    if iter.inner == 20 {
+                        if index == 0 {
+                            println!("average over 10 iters: {}", (time::precise_time_s() - going) / 10.0);
+                        }
+                    }
 
                     // /---- should look familiar! ----\
                     for node in 0..src.len() {
@@ -151,8 +162,6 @@ where C: Communicator {
 
                     for _ in 0..(graph.nodes() + 1) { dst.push(0.0); }
 
-                    println!("iteration {:?}: {}s", iter, time::precise_time_s() - start);
-                    start = time::precise_time_s();
                 }
 
                 while let Some((iter, data)) = input.pull() {
@@ -195,4 +204,9 @@ where C: Communicator {
     }
 
     while root.step() { }
+
+    if index == 0 {
+        println!("elapsed: {}", time::precise_time_s() - start);
+    }
+
 }
