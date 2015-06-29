@@ -3,6 +3,7 @@
 // #![feature(collections_drain)]
 // #![feature(core)]
 
+extern crate abomonation;
 extern crate columnar;
 extern crate timely;
 extern crate time;
@@ -20,7 +21,9 @@ use timely::communication::*;
 
 use timely::drain::DrainExt;
 
+use abomonation::Abomonation;
 use columnar::Columnar;
+
 
 pub mod graph;
 mod typedrw;
@@ -70,7 +73,7 @@ pub trait PrefixExtender<P, E> {
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar, E: Data+Columnar> {
+pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation> {
     fn count(&self, ActiveStream<G, (P, u64, u64)>, u64) -> ActiveStream<G, (P, u64, u64)>;
     fn propose_a(&self, ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)>;
     fn propose_b(&self, ActiveStream<G, P>, Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)>;
@@ -78,7 +81,7 @@ pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar, E: Data+Column
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>> {
+impl<P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>> {
 
     fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) -> ActiveStream<G, (P, u64, u64)> {
         let clone = self.clone();
@@ -146,14 +149,14 @@ impl<P: Data+Columnar, E: Data+Columnar, G: GraphBuilder, PE: PrefixExtender<P, 
     }
 }
 
-pub trait GenericJoinExt<G:GraphBuilder, P:Data+Columnar> {
-    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+pub trait GenericJoinExt<G:GraphBuilder, P:Data+Columnar+Abomonation> {
+    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
         -> ActiveStream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<G: GraphBuilder, P:Data+Columnar> GenericJoinExt<G, P> for ActiveStream<G, P> {
-    fn extend<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+impl<G: GraphBuilder, P:Data+Columnar+Abomonation> GenericJoinExt<G, P> for ActiveStream<G, P> {
+    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
         -> ActiveStream<G, (P, Vec<E>)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
@@ -181,14 +184,14 @@ impl<G: GraphBuilder, P:Data+Columnar> GenericJoinExt<G, P> for ActiveStream<G, 
 }
 
 
-pub trait GenericJoinExt2<G:GraphBuilder, P:Data+Columnar> {
-    fn extend2<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+pub trait GenericJoinExt2<G:GraphBuilder, P:Data+Columnar+Abomonation> {
+    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
         -> ActiveStream<G, (P, E)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<G: GraphBuilder<Timestamp=Product<RootTimestamp, u64>>, P:Data+Columnar> GenericJoinExt2<G, P> for ActiveStream<G, P> {
-    fn extend2<E: Data+Columnar>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+impl<G: GraphBuilder<Timestamp=Product<RootTimestamp, u64>>, P:Data+Columnar+Abomonation> GenericJoinExt2<G, P> for ActiveStream<G, P> {
+    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
         -> ActiveStream<G, (P, E)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
