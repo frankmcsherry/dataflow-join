@@ -1,5 +1,3 @@
-// #![feature(scoped)]
-
 extern crate mmap;
 extern crate time;
 extern crate timely;
@@ -11,7 +9,7 @@ use docopt::Docopt;
 
 use std::io::{BufRead, stdin};
 use std::rc::Rc;
-use std::cell::RefCell;
+// use std::cell::RefCell;
 use std::thread;
 
 use std::cmp::Ordering::*;
@@ -137,7 +135,7 @@ where C: Communicator {
     let index = communicator.index();
     let peers = communicator.peers();
 
-    let graph = Rc::new(RefCell::new(GraphMMap::<u32>::new(&filename)));
+    let graph = Rc::new(GraphMMap::<u32>::new(&filename));
 
     let mut root = GraphRoot::new(communicator);
     let mut input = { // new scope to avoid long borrow on root
@@ -146,12 +144,12 @@ where C: Communicator {
         let (input, stream) = builder.new_input::<u32>();
 
         if !alt {
-        // extend u32s to pairs, then pairs to triples.
-        let triangles = builder.enable(&stream)
-                               .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
-                               .flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
-                               .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
-                                            &graph.extend_using(|| { |&(_,b)| b as u64 })]);
+            // extend u32s to pairs, then pairs to triples.
+            let triangles = builder.enable(&stream)
+                                   .extend(vec![&graph.extend_using(|| { |&a| a as u64 } )])
+                                   .flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
+                                   .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
+                                                &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
             if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
         }
@@ -189,7 +187,7 @@ where C: Communicator {
         }
     }
     else {
-        let nodes = graph.borrow().nodes() as u64 - 1;
+        let nodes = graph.nodes() as u64 - 1;
         let limit = (nodes / step_size) + 1;
         for round in (0..limit) {
             input.send_at(round, (0..step_size).map(|x| x + round * step_size)
@@ -225,8 +223,8 @@ where C: Communicator {
     let peers = communicator.peers();
 
     let batch = step_size;
-    let graph = Rc::new(RefCell::new(GraphMMap::<u32>::new(&filename)));
-    let nodes = graph.borrow().nodes() as u64;
+    let graph = Rc::new(GraphMMap::<u32>::new(&filename));
+    let nodes = graph.nodes() as u64;
 
     let mut root = GraphRoot::new(communicator);
 

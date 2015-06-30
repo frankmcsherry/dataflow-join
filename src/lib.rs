@@ -1,7 +1,4 @@
 #![allow(dead_code)]
-// #![feature(collections)]
-// #![feature(collections_drain)]
-// #![feature(core)]
 
 extern crate abomonation;
 extern crate columnar;
@@ -10,7 +7,6 @@ extern crate time;
 extern crate mmap;
 
 use std::rc::Rc;
-use std::cell::RefCell;
 
 use timely::progress::timestamp::RootTimestamp;
 use timely::progress::nested::product::Product;
@@ -81,15 +77,17 @@ pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar+Abomonation, E:
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<RefCell<PE>> {
+impl<P, E, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<PE>
+where P: Data+Columnar+Abomonation,
+      E: Data+Columnar+Abomonation {
 
     fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) -> ActiveStream<G, (P, u64, u64)> {
         let clone = self.clone();
 
-        let func = self.borrow().route();
+        let func = self.route();
         let exch = Exchange::new(move |&(ref x,_,_)| func(x));
         stream.unary_stream(exch, format!("Count"), move |input, output| {
-            let extender = clone.borrow();
+            let extender = &*clone;
             while let Some((time, data)) = input.pull() {
                 output.give_at(&time, data.drain_temp().filter_map(|(p,c,i)| {
                     let nc = extender.count(&p);
@@ -102,10 +100,10 @@ impl<P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation, G: GraphBuilder
 
     fn propose_a(&self, stream: ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)> {
         let clone = self.clone();
-        let func = self.borrow().route();
+        let func = self.route();
         let exch = Exchange::new(move |x| func(x));
         stream.unary_stream(exch, format!("Propose"), move |input, output| {
-            let extender = clone.borrow();
+            let extender = &*clone;
             while let Some((time, data)) = input.pull() {
                 output.give_at(&time, data.drain_temp().map(|p| {
                     let mut vec = Vec::new();
@@ -118,10 +116,10 @@ impl<P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation, G: GraphBuilder
     fn propose_b(&self, stream: ActiveStream<G, P>, other: Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)> {
         let mut stash = Vec::new();
         let clone = self.clone();
-        let func = self.borrow().route();
+        let func = self.route();
         let exch = Exchange::new(move |x| func(x));
         stream.binary_stream(other, exch, Pipeline, format!("Propose"), move |input1, input2, output| {
-            let extender = clone.borrow();
+            let extender = &*clone;
             while let Some((_time, mut vec)) = input2.pull() { stash.extend(vec.drain_temp()); }
             while let Some((time, data)) = input1.pull() {
                 output.give_at(&time, data.drain_temp().map(|p| {
@@ -133,11 +131,11 @@ impl<P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation, G: GraphBuilder
         })
     }
     fn intersect(&self, stream: ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)> {
-        let func = self.borrow().route();
+        let func = self.route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
         stream.unary_stream(exch, format!("Intersect"), move |input, output| {
-            let extender = clone.borrow();
+            let extender = &*clone;
             while let Some((time, data)) = input.pull() {
                 output.give_at(&time, data.drain_temp().filter_map(|(prefix, mut extensions)| {
                     extender.intersect(&prefix, &mut extensions);

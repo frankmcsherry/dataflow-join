@@ -1,25 +1,24 @@
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::marker::PhantomData;
 
 use typedrw::TypedMemoryMap;
 use PrefixExtender;
 
 pub trait GraphExtenderExt<G: GraphTrait> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<RefCell<GraphExtender<G,P,L,F>>>
+    fn extend_using<P,L,F>(&self, route: F) -> Rc<GraphExtender<G,P,L,F>>
         where L: Fn(&P)->u64+'static, F: Fn()->L+'static;
 }
 
-impl<G: GraphTrait> GraphExtenderExt<G> for Rc<RefCell<G>> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<RefCell<GraphExtender<G,P,L,F>>>
+impl<G: GraphTrait> GraphExtenderExt<G> for Rc<G> {
+    fn extend_using<P,L,F>(&self, route: F) -> Rc<GraphExtender<G,P,L,F>>
         where L: Fn(&P)->u64+'static, F: Fn()->L+'static {
         let logic = route();
-        Rc::new(RefCell::new(GraphExtender {
+        Rc::new(GraphExtender {
             graph:  self.clone(),
             logic:  logic,
             route:  route,
             phant:  PhantomData,
-        }))
+        })
     }
 }
 
@@ -84,7 +83,7 @@ impl<E: Ord+Copy+Send+'static> GraphTrait for GraphMMap<E> {
 }
 
 pub struct GraphExtender<G: GraphTrait, P, L: Fn(&P)->u64, F:Fn()->L> {
-    graph: Rc<RefCell<G>>,
+    graph: Rc<G>,
     logic: L,
     route: F,
     phant: PhantomData<P>,
@@ -100,18 +99,17 @@ where <G as GraphTrait>::Target : Clone {
 
     fn count(&self, prefix: &P) -> u64 {
         let node = (self.logic)(prefix) as usize;
-        self.graph.borrow().edges(node).len() as u64
+        self.graph.edges(node).len() as u64
     }
 
     fn propose(&self, prefix: &P, list: &mut Vec<G::Target>) {
         let node = (self.logic)(prefix) as usize;
-        list.extend(self.graph.borrow().edges(node).iter().cloned());
+        list.extend(self.graph.edges(node).iter().cloned());
     }
 
     fn intersect(&self, prefix: &P, list: &mut Vec<G::Target>) {
         let node = (self.logic)(prefix) as usize;
-        let graph = self.graph.borrow();
-        let mut slice = graph.edges(node);
+        let mut slice = self.graph.edges(node);
 
         if list.len() < slice.len() / 4 {
             list.retain(|value| {
