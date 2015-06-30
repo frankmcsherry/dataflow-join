@@ -22,7 +22,7 @@ fn main() {
     let source = args.get_str("<source>");
     let _target = args.get_str("<target>");
     let mut graph = livejournal(&source);
-    organize_graph(&mut graph);
+    // organize_graph(&mut graph);
     _digest_graph_vector(&_extract_fragment(graph.iter().map(|x| *x), 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
 
 }
@@ -34,11 +34,12 @@ fn livejournal(filename: &str) -> Vec<(u32, u32)> {
     for readline in file.lines() {
         let line = readline.ok().expect("read error");
         if !line.starts_with('#') {
-            let elts: Vec<&str> = line[..].split(" ").collect();
+            let elts: Vec<&str> = line[..].split(",").collect();
             let src: u32 = elts[0].parse().ok().expect("malformed src");
             let dst: u32 = elts[1].parse().ok().expect("malformed dst");
-            if src < dst { graph.push((src, dst)) }
-            if src > dst { graph.push((dst, src)) }
+            graph.push((src, dst))
+            // if src < dst { graph.push((src, dst)) }
+            // if src > dst { graph.push((dst, src)) }
         }
     }
 
