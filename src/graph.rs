@@ -89,10 +89,10 @@ pub struct GraphExtender<G: GraphTrait, P, L: Fn(&P)->u64, F:Fn()->L> {
     phant: PhantomData<P>,
 }
 
-impl<G: GraphTrait, P, L: Fn(&P)->u64+'static, F:Fn()->L+'static> PrefixExtender<P, G::Target> for GraphExtender<G, P, L, F>
+impl<G: GraphTrait, P, L: Fn(&P)->u64+'static, F:Fn()->L+'static> PrefixExtender for GraphExtender<G, P, L, F>
 where <G as GraphTrait>::Target : Clone {
-    // type Prefix = P;
-    // type Extension = G::Target;
+    type Prefix = P;
+    type Extension = G::Target;
 
     type RoutingFunction = L;
     fn route(&self) -> L { (self.route)() }

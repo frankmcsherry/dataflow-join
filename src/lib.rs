@@ -54,34 +54,41 @@ use flattener::*;
 
 
 // record-by-record prefix extension functionality
-pub trait PrefixExtender<P, E> {
+pub trait PrefixExtender {
+    type Prefix;
+    type Extension;
 
     // these are the parts required for the join algorithm
-    fn count(&self, &P) -> u64;
-    fn propose(&self, &P, &mut Vec<E>);
-    fn intersect(&self, &P, &mut Vec<E>);
+    fn count(&self, &Self::Prefix) -> u64;
+    fn propose(&self, &Self::Prefix, &mut Vec<Self::Extension>);
+    fn intersect(&self, &Self::Prefix, &mut Vec<Self::Extension>);
 
     // these are needed to tell timely dataflow how to route prefixes.
     // this object will be shared under an Rc<RefCell<...>> so we want
     // to give back a function, rather than provide a method ourself.
-    type RoutingFunction: Fn(&P)->u64+'static;
+    type RoutingFunction: Fn(&Self::Prefix)->u64+'static;
     fn route(&self) -> Self::RoutingFunction;
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<G: GraphBuilder, P: Data+Columnar+Abomonation, E: Data+Columnar+Abomonation> {
-    fn count(&self, ActiveStream<G, (P, u64, u64)>, u64) -> ActiveStream<G, (P, u64, u64)>;
-    fn propose_a(&self, ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)>;
-    fn propose_b(&self, ActiveStream<G, P>, Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)>;
-    fn intersect(&self, ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)>;
+pub trait StreamPrefixExtender<G: GraphBuilder> {
+    type Prefix: Data+Columnar+Abomonation;
+    type Extension: Data+Columnar+Abomonation;
+
+    fn count(&self, ActiveStream<G, (Self::Prefix, u64, u64)>, u64) -> ActiveStream<G, (Self::Prefix, u64, u64)>;
+    fn propose_a(&self, ActiveStream<G, Self::Prefix>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
+    fn propose_b(&self, ActiveStream<G, Self::Prefix>, Stream<G::Timestamp, Vec<Self::Extension>>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
+    fn intersect(&self, ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>;
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<P, E, G: GraphBuilder, PE: PrefixExtender<P, E>+'static> StreamPrefixExtender<G, P, E> for Rc<PE>
-where P: Data+Columnar+Abomonation,
-      E: Data+Columnar+Abomonation {
+impl<G: GraphBuilder, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<PE>
+where PE::Prefix: Data+Columnar+Abomonation,
+      PE::Extension: Data+Columnar+Abomonation, {
+    type Prefix = PE::Prefix;
+    type Extension = PE::Extension;
 
-    fn count(&self, stream: ActiveStream<G, (P, u64, u64)>, ident: u64) -> ActiveStream<G, (P, u64, u64)> {
+    fn count(&self, stream: ActiveStream<G, (Self::Prefix, u64, u64)>, ident: u64) -> ActiveStream<G, (Self::Prefix, u64, u64)> {
         let clone = self.clone();
 
         let func = self.route();
@@ -98,7 +105,7 @@ where P: Data+Columnar+Abomonation,
         })
     }
 
-    fn propose_a(&self, stream: ActiveStream<G, P>) -> ActiveStream<G, (P, Vec<E>)> {
+    fn propose_a(&self, stream: ActiveStream<G, Self::Prefix>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let clone = self.clone();
         let func = self.route();
         let exch = Exchange::new(move |x| func(x));
@@ -113,7 +120,7 @@ where P: Data+Columnar+Abomonation,
             }
         })
     }
-    fn propose_b(&self, stream: ActiveStream<G, P>, other: Stream<G::Timestamp, Vec<E>>) -> ActiveStream<G, (P, Vec<E>)> {
+    fn propose_b(&self, stream: ActiveStream<G, Self::Prefix>, other: Stream<G::Timestamp, Vec<Self::Extension>>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let mut stash = Vec::new();
         let clone = self.clone();
         let func = self.route();
@@ -130,7 +137,7 @@ where P: Data+Columnar+Abomonation,
             }
         })
     }
-    fn intersect(&self, stream: ActiveStream<G, (P, Vec<E>)>) -> ActiveStream<G, (P, Vec<E>)> {
+    fn intersect(&self, stream: ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)>) -> ActiveStream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let func = self.route();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| func(x));
@@ -148,13 +155,13 @@ where P: Data+Columnar+Abomonation,
 }
 
 pub trait GenericJoinExt<G:GraphBuilder, P:Data+Columnar+Abomonation> {
-    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
 impl<G: GraphBuilder, P:Data+Columnar+Abomonation> GenericJoinExt<G, P> for ActiveStream<G, P> {
-    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, Vec<E>)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
@@ -183,13 +190,13 @@ impl<G: GraphBuilder, P:Data+Columnar+Abomonation> GenericJoinExt<G, P> for Acti
 
 
 pub trait GenericJoinExt2<G:GraphBuilder, P:Data+Columnar+Abomonation> {
-    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, E)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
 impl<G: GraphBuilder<Timestamp=Product<RootTimestamp, u64>>, P:Data+Columnar+Abomonation> GenericJoinExt2<G, P> for ActiveStream<G, P> {
-    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, P, E>>)
+    fn extend2<E: Data+Columnar+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> ActiveStream<G, (P, E)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));

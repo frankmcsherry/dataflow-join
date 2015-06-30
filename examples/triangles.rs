@@ -151,7 +151,13 @@ where C: Communicator {
                                    .extend(vec![&graph.extend_using(|| { |&(a,_)| a as u64 }),
                                                 &graph.extend_using(|| { |&(_,b)| b as u64 })]);
 
-            if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+            triangles.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
+                     .extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
+                               &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
+                               &graph.extend_using(|| { |&((_,_),c)| c as u64 })]);
+
+
+            // if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
         }
         else {
             // extend u32s to pairs, then pairs to triples.
@@ -256,25 +262,25 @@ where C: Communicator {
     while root.step() { }
 }
 
-// // fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->
-// //                                                             Stream<'a, G, (((u32, u32), u32), u32)>
-// // where G: GraphBuilder+'a, G2: GraphTrait<Target=u32> {
-// //     //
-// //     stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
-// //                        &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
-// //                        &graph.extend_using(|| { |&((_,_),c)| c as u64 })])
-// //           .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
-// //     //
-// //     //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
-// //     //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
-// //     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
-// //     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
-// //     //
-// //     // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
-// //     //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
-// //     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
-// //     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
-// //     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
-// //     //
-// //     // sixes.observe();
-// // }
+// fn _quads<'a, G, G2>(stream: &mut Stream<'a, G, ((u32, u32), u32)>, graph: &Rc<RefCell<G2>>) ->
+//                                                             Stream<'a, G, (((u32, u32), u32), u32)>
+// where G: GraphBuilder+'a, G2: GraphTrait<Target=u32> {
+//     //
+//     stream.extend(vec![&graph.extend_using(|| { |&((a,_),_)| a as u64 }),
+//                        &graph.extend_using(|| { |&((_,b),_)| b as u64 }),
+//                        &graph.extend_using(|| { |&((_,_),c)| c as u64 })])
+//           .flat_map(|(p,es)| es.into_iter().map(move |e| (p.clone(), e)))
+//     //
+//     //  let mut fives = quads.extend(vec![Box::new(fragment.extend_using(|| { |&(((a,_),_),_)| a as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,b),_),_)| b as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),c),_)| c as u64 })),
+//     //                                    Box::new(fragment.extend_using(|| { |&(((_,_),_),d)| d as u64 }))]).flatten();
+//     //
+//     // let mut sixes = fives.extend(vec![Box::new(fragment.extend_using(|| { |&((((a,_),_),_),_)| a as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,b),_),_),_)| b as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),c),_),_)| c as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),d),_)| d as u64 })),
+//     //                                   Box::new(fragment.extend_using(|| { |&((((_,_),_),_),e)| e as u64 }))]).flatten();
+//     //
+//     // sixes.observe();
+// }
