@@ -1,8 +1,5 @@
 extern crate dataflow_join;
 
-extern crate docopt;
-use docopt::Docopt;
-
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::fs::File;
 use std::slice;
@@ -10,20 +7,14 @@ use std::mem;
 
 use dataflow_join::graph::{GraphTrait, GraphVector};
 
-static USAGE: &'static str = "
-Usage: digest <source> <target>
-";
-
 fn main() {
-    let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
+    println!("Usage: digest <source> <target>");
+    let source = std::env::args().skip(1).next().unwrap();
+    let target = std::env::args().skip(2).next().unwrap();
 
-    println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
-    println!("at least, it will once you edit the code to uncomment the line.");
-    let source = args.get_str("<source>");
-    let _target = args.get_str("<target>");
+
     let mut graph = livejournal(&source);
-    // organize_graph(&mut graph);
-    _digest_graph_vector(&_extract_fragment(graph.iter().map(|x| *x), 0, 1), _target); // will overwrite "prefix.offsets" and "prefix.targets"
+    _digest_graph_vector(&_extract_fragment(graph.iter().map(|x| *x), 0, 1), &target); // will overwrite "prefix.offsets" and "prefix.targets"
 
 }
 

@@ -1,8 +1,5 @@
 extern crate dataflow_join;
 
-extern crate docopt;
-use docopt::Docopt;
-
 use std::io::{BufWriter, Write};
 use std::fs::File;
 use std::slice;
@@ -10,21 +7,14 @@ use std::mem;
 
 use dataflow_join::graph::{GraphTrait, GraphVector, GraphMMap};
 
-static USAGE: &'static str = "
-Usage: layout <source> <target>
-";
-
 fn main() {
-    let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
-
-    println!("digest will overwrite <target>.targets and <target>.offsets, so careful");
-    println!("at least, it will once you edit the code to uncomment the line.");
-    let source = args.get_str("<source>");
-    let _target = args.get_str("<target>");
+    println!("Usage: layout <source> <target>");
+    let source = std::env::args().skip(1).next().unwrap();
+    let target = std::env::args().skip(2).next().unwrap();
     let graph = layout(&source);
 
     let graph = _extract_fragment(&graph, 0, 1);
-    _digest_graph_vector(&graph, _target);
+    _digest_graph_vector(&graph, &target);
 }
 
 fn layout(prefix: &str) -> Vec<(u32, u32)> {

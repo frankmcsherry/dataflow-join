@@ -5,18 +5,14 @@ use typedrw::TypedMemoryMap;
 use PrefixExtender;
 
 pub trait GraphExtenderExt<G: GraphTrait> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<GraphExtender<G,P,L,F>>
-        where L: Fn(&P)->u64+'static, F: Fn()->L+'static;
+    fn extend_using<P,L: Fn(&P)->u64+'static>(&self, route: L) -> Rc<GraphExtender<G,P,L>>;
 }
 
 impl<G: GraphTrait> GraphExtenderExt<G> for Rc<G> {
-    fn extend_using<P,L,F>(&self, route: F) -> Rc<GraphExtender<G,P,L,F>>
-        where L: Fn(&P)->u64+'static, F: Fn()->L+'static {
-        let logic = route();
+    fn extend_using<P,L: Fn(&P)->u64+'static>(&self, logic: L) -> Rc<GraphExtender<G,P,L>> {
         Rc::new(GraphExtender {
             graph:  self.clone(),
-            logic:  logic,
-            route:  route,
+            logic:  Rc::new(logic),
             phant:  PhantomData,
         })
     }
@@ -82,33 +78,32 @@ impl<E: Ord+Copy+Send+'static> GraphTrait for GraphMMap<E> {
     }
 }
 
-pub struct GraphExtender<G: GraphTrait, P, L: Fn(&P)->u64, F:Fn()->L> {
+pub struct GraphExtender<G: GraphTrait, P, L: Fn(&P)->u64> {
     graph: Rc<G>,
-    logic: L,
-    route: F,
+    logic: Rc<L>,
     phant: PhantomData<P>,
 }
 
-impl<G: GraphTrait, P, L: Fn(&P)->u64+'static, F:Fn()->L+'static> PrefixExtender for GraphExtender<G, P, L, F>
+impl<G: GraphTrait, P, L: Fn(&P)->u64+'static> PrefixExtender for GraphExtender<G, P, L>
 where <G as GraphTrait>::Target : Clone {
     type Prefix = P;
     type Extension = G::Target;
 
     type RoutingFunction = L;
-    fn route(&self) -> L { (self.route)() }
+    fn logic(&self) -> Rc<L> { self.logic.clone() }
 
     fn count(&self, prefix: &P) -> u64 {
-        let node = (self.logic)(prefix) as usize;
+        let node = (*self.logic)(prefix) as usize;
         self.graph.edges(node).len() as u64
     }
 
     fn propose(&self, prefix: &P, list: &mut Vec<G::Target>) {
-        let node = (self.logic)(prefix) as usize;
+        let node = (*self.logic)(prefix) as usize;
         list.extend(self.graph.edges(node).iter().cloned());
     }
 
     fn intersect(&self, prefix: &P, list: &mut Vec<G::Target>) {
-        let node = (self.logic)(prefix) as usize;
+        let node = (*self.logic)(prefix) as usize;
         let mut slice = self.graph.edges(node);
 
         if list.len() < slice.len() / 4 {

@@ -2,28 +2,17 @@ extern crate mmap;
 extern crate time;
 extern crate dataflow_join;
 
-extern crate docopt;
-use docopt::Docopt;
-
 use std::cmp::Ordering::*;
 
 use dataflow_join::graph::{GraphTrait, GraphMMap, gallop};
 
-static USAGE: &'static str = "
-Usage: triangles dataflow <source> <workers> <stepsize> [--inspect] [--interactive] [--alt]
-       triangles autorun <source> <workers> <stepsize>
-       triangles compute <source>
-       triangles help
-";
-
-
-
 fn main () {
-    let args = Docopt::new(USAGE).and_then(|dopt| dopt.parse()).unwrap_or_else(|e| e.exit());
-
-    let source = args.get_str("<source>");
-    let graph = GraphMMap::new(&source);
-    println!("triangles: {:?}", raw_triangles(&graph));
+    if let Some(source) = std::env::args().skip(1).next() {
+        println!("triangles: {:?}", raw_triangles(&GraphMMap::new(&source)));
+    }
+    else {
+        println!("usage: <source>");
+    }
 }
 
 fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
