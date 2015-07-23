@@ -99,7 +99,8 @@ where <G as GraphTrait>::Target : Clone {
 
     fn propose(&self, prefix: &P, list: &mut Vec<G::Target>) {
         let node = (*self.logic)(prefix) as usize;
-        list.extend(self.graph.edges(node).iter().cloned());
+        *list = self.graph.edges(node).to_vec();
+//        list.extend(self.graph.edges(node).iter().cloned());
     }
 
     fn intersect(&self, prefix: &P, list: &mut Vec<G::Target>) {
