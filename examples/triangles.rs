@@ -21,7 +21,7 @@ fn main () {
     let inspect = std::env::args().skip(3).next().unwrap() == "inspect";
 
     timely::initialize(std::env::args().skip(4), move |communicator| {
-        triangles(communicator, source.clone(), inspect, interactive, 1000);
+        triangles(communicator, source.clone(), inspect, interactive, 100);
     });
 }
 
