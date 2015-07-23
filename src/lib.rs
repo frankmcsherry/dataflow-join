@@ -89,11 +89,15 @@ where PE::Prefix: Data+Abomonation,
         let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
         stream.unary_stream(exch, format!("Count"), move |input, output| {
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain_temp().filter_map(|(p,c,i)| {
-                    let nc = (*clone).count(&p);
-                    if nc > c { Some((p,c,i)) }
-                    else      { if nc > 0 { Some((p,nc,ident)) } else { None } }
-                }));
+                for &mut (ref p, ref mut c, ref mut i) in data.iter_mut() {
+                    let nc = (*clone).count(p);
+                    if &nc < c {
+                        *c = nc;
+                        *i = ident;
+                    }
+                }
+                data.retain(|x| x.1 > 0);
+                output.give_vector_at(&time, data);
             }
         })
     }
@@ -118,10 +122,11 @@ where PE::Prefix: Data+Abomonation,
         let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
         stream.unary_stream(exch, format!("Intersect"), move |input, output| {
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain_temp().filter_map(|(prefix, mut extensions)| {
-                    (*clone).intersect(&prefix, &mut extensions);
-                    if extensions.len() > 0 { Some((prefix, extensions)) } else { None }
-                }));
+                for &mut (ref prefix, ref mut extensions) in data.iter_mut() {
+                    (*clone).intersect(prefix, extensions);
+                }
+                data.retain(|x| x.1.len() > 0);
+                output.give_vector_at(&time, data);
             }
         })
     }
@@ -142,11 +147,11 @@ impl<G: GraphBuilder, P:Data+Abomonation> GenericJoinExt<G, P> for Stream<G, P> 
             counts = extender.count(counts, index as u64);
         }
 
-        let parts = counts.partition(extenders.len() as u64, |&(_, _, i)| i);
+        let parts = counts.partition(extenders.len() as u64, |(p, _, i)| (i, p));
 
         let mut results = Vec::new();
-        for (index, part) in parts.into_iter().enumerate() {
-            let nominations = part.map(|(x, _, _)| x);
+        for (index, nominations) in parts.into_iter().enumerate() {
+            // let nominations = part.map(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
                 extensions = extenders[other].intersect(extensions);
