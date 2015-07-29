@@ -7,10 +7,10 @@ extern crate mmap;
 
 use std::rc::Rc;
 
-use timely::example_shared::*;
-use timely::example_shared::operators::*;
+use timely::construction::*;
+use timely::construction::operators::*;
 use timely::communication::pact::Exchange;
-use timely::communication::*;
+use timely::communication::Data;
 
 use timely::drain::DrainExt;
 
@@ -87,7 +87,7 @@ where PE::Prefix: Data+Abomonation,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
-        stream.unary_stream(exch, format!("Count"), move |input, output| {
+        stream.unary_stream(exch, "Count", move |input, output| {
             while let Some((time, data)) = input.pull() {
                 for &mut (ref p, ref mut c, ref mut i) in data.iter_mut() {
                     let nc = (*clone).count(p);
@@ -97,7 +97,7 @@ where PE::Prefix: Data+Abomonation,
                     }
                 }
                 data.retain(|x| x.1 > 0);
-                output.give_vector_at(&time, data);
+                output.session(&time).give_message(data);
             }
         })
     }
@@ -106,9 +106,9 @@ where PE::Prefix: Data+Abomonation,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
-        stream.unary_stream(exch, format!("Propose"), move |input, output| {
+        stream.unary_stream(exch, "Propose", move |input, output| {
             while let Some((time, data)) = input.pull() {
-                output.give_at(&time, data.drain_temp().map(|p| {
+                output.session(&time).give_iterator(data.drain_temp().map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
                     (p, vec)
@@ -120,13 +120,13 @@ where PE::Prefix: Data+Abomonation,
         let logic = self.logic();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
-        stream.unary_stream(exch, format!("Intersect"), move |input, output| {
+        stream.unary_stream(exch, "Intersect", move |input, output| {
             while let Some((time, data)) = input.pull() {
                 for &mut (ref prefix, ref mut extensions) in data.iter_mut() {
                     (*clone).intersect(prefix, extensions);
                 }
                 data.retain(|x| x.1.len() > 0);
-                output.give_vector_at(&time, data);
+                output.session(&time).give_message(data);
             }
         })
     }
