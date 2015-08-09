@@ -1,21 +1,17 @@
 #![allow(dead_code)]
 
-extern crate abomonation;
 extern crate timely;
 extern crate time;
 extern crate mmap;
 
 use std::rc::Rc;
 
-use timely::construction::*;
-use timely::construction::operators::*;
-use timely::communication::pact::Exchange;
-use timely::communication::Data;
+use timely::dataflow::*;
+use timely::dataflow::operators::*;
+use timely::dataflow::channels::pact::Exchange;
+use timely::Data;
 
 use timely::drain::DrainExt;
-
-use abomonation::Abomonation;
-
 
 pub mod graph;
 mod typedrw;
@@ -67,9 +63,9 @@ pub trait PrefixExtender {
 }
 
 // functionality required by the GenericJoin layer
-pub trait StreamPrefixExtender<G: GraphBuilder> {
-    type Prefix: Data+Abomonation;
-    type Extension: Data+Abomonation;
+pub trait StreamPrefixExtender<G: Scope> {
+    type Prefix: Data;
+    type Extension: Data;
 
     fn count(&self, Stream<G, (Self::Prefix, u64, u64)>, u64) -> Stream<G, (Self::Prefix, u64, u64)>;
     fn propose(&self, Stream<G, Self::Prefix>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)>;
@@ -77,9 +73,10 @@ pub trait StreamPrefixExtender<G: GraphBuilder> {
 }
 
 // implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-impl<G: GraphBuilder, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<PE>
-where PE::Prefix: Data+Abomonation,
-      PE::Extension: Data+Abomonation, {
+// TODO : Add a Rc<RefCell<Vec<Vec<Self::Extension>>>> to recycle allocations
+impl<G: Scope, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<PE>
+where PE::Prefix: Data,
+      PE::Extension: Data, {
     type Prefix = PE::Prefix;
     type Extension = PE::Extension;
 
@@ -88,7 +85,7 @@ where PE::Prefix: Data+Abomonation,
         let logic = self.logic();
         let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
         stream.unary_stream(exch, "Count", move |input, output| {
-            while let Some((time, data)) = input.pull() {
+            while let Some((time, data)) = input.next() {
                 for &mut (ref p, ref mut c, ref mut i) in data.iter_mut() {
                     let nc = (*clone).count(p);
                     if &nc < c {
@@ -97,7 +94,7 @@ where PE::Prefix: Data+Abomonation,
                     }
                 }
                 data.retain(|x| x.1 > 0);
-                output.session(&time).give_message(data);
+                output.session(&time).give_content(data);
             }
         })
     }
@@ -107,7 +104,7 @@ where PE::Prefix: Data+Abomonation,
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
         stream.unary_stream(exch, "Propose", move |input, output| {
-            while let Some((time, data)) = input.pull() {
+            while let Some((time, data)) = input.next() {
                 output.session(&time).give_iterator(data.drain_temp().map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
@@ -121,25 +118,25 @@ where PE::Prefix: Data+Abomonation,
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
         stream.unary_stream(exch, "Intersect", move |input, output| {
-            while let Some((time, data)) = input.pull() {
+            while let Some((time, data)) = input.next() {
                 for &mut (ref prefix, ref mut extensions) in data.iter_mut() {
                     (*clone).intersect(prefix, extensions);
                 }
                 data.retain(|x| x.1.len() > 0);
-                output.session(&time).give_message(data);
+                output.session(&time).give_content(data);
             }
         })
     }
 }
 
-pub trait GenericJoinExt<G:GraphBuilder, P:Data+Abomonation> {
-    fn extend<E: Data+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
+pub trait GenericJoinExt<G:Scope, P:Data> {
+    fn extend<E: Data>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> Stream<G, (P, Vec<E>)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<G: GraphBuilder, P:Data+Abomonation> GenericJoinExt<G, P> for Stream<G, P> {
-    fn extend<E: Data+Abomonation>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
+impl<G: Scope, P:Data> GenericJoinExt<G, P> for Stream<G, P> {
+    fn extend<E: Data>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
         -> Stream<G, (P, Vec<E>)> {
 
         let mut counts = self.map(|p| (p, 1 << 31, 0));
@@ -151,7 +148,6 @@ impl<G: GraphBuilder, P:Data+Abomonation> GenericJoinExt<G, P> for Stream<G, P> 
 
         let mut results = Vec::new();
         for (index, nominations) in parts.into_iter().enumerate() {
-            // let nominations = part.map(|(x, _, _)| x);
             let mut extensions = extenders[index].propose(nominations);
             for other in (0..extenders.len()).filter(|&x| x != index) {
                 extensions = extenders[other].intersect(extensions);
@@ -160,6 +156,6 @@ impl<G: GraphBuilder, P:Data+Abomonation> GenericJoinExt<G, P> for Stream<G, P> 
             results.push(extensions);    // save extensions
         }
 
-        self.builder().concatenate(results)
+        self.scope().concatenate(results)
     }
 }
