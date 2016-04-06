@@ -64,7 +64,7 @@ fn main () {
 
         let nodes = graph.nodes() - 1;
         let limit = (nodes / step_size) + 1;
-        for round in (0..limit) {
+        for round in 0..limit {
             for source in 0..step_size {
                 let candidate = source + round * step_size;
                 if candidate % peers == index && candidate < nodes {
@@ -78,5 +78,5 @@ fn main () {
                 root.step();
             }
         }
-    })
+    }).unwrap();
 }
