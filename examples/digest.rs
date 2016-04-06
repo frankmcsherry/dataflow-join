@@ -1,5 +1,7 @@
 extern crate dataflow_join;
+extern crate timely_sort;
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::fs::File;
 use std::slice;
@@ -8,93 +10,156 @@ use std::mem;
 use dataflow_join::graph::{GraphTrait, GraphVector};
 
 fn main() {
-    println!("Usage: digest <source> <target>");
+    // println!("Usage: digest <source> <target>");
     let source = std::env::args().skip(1).next().unwrap();
     let target = std::env::args().skip(2).next().unwrap();
 
 
-    let mut graph = livejournal(&source);
-    _digest_graph_vector(&_extract_fragment(graph.iter().map(|x| *x), 0, 1), &target); // will overwrite "prefix.offsets" and "prefix.targets"
+    let mut graph = read_from_text(&source);
+    _digest_graph_vector(&_extract_fragment(graph.into_iter().flat_map(|x| x.into_iter())), &target); // will overwrite "prefix.offsets" and "prefix.targets"
 
 }
 
-// loads the livejournal file available at https://snap.stanford.edu/data/soc-LiveJournal1.html
-fn livejournal(filename: &str) -> Vec<(u32, u32)> {
-    let mut graph = Vec::new();
+fn read_from_text(filename: &str) -> Vec<Vec<(u32, u32)>> {
+    let mut sorter = timely_sort::LSBRadixSorter::new();
     let file = BufReader::new(File::open(filename).unwrap());
+
+    let mut chunks = Vec::new();
+    let mut chunk = Vec::with_capacity(1024);
+
+    let mut max = 0;
+
     for readline in file.lines() {
         let line = readline.ok().expect("read error");
         if !line.starts_with('#') {
-            let elts: Vec<&str> = line[..].split(",").collect();
-            let src: u32 = elts[0].parse().ok().expect("malformed src");
-            let dst: u32 = elts[1].parse().ok().expect("malformed dst");
-            graph.push((src, dst))
-            // if src < dst { graph.push((src, dst)) }
-            // if src > dst { graph.push((dst, src)) }
+            let mut elts = line[..].split_whitespace();
+            let src: u32 = elts.next().unwrap().parse().ok().expect("malformed src");
+            let dst: u32 = elts.next().unwrap().parse().ok().expect("malformed dst");
+
+            let (src, dst) = if src < dst { (src, dst) } else { (dst, src) };
+            if src != dst {
+                chunk.push((src, dst));
+            }
+            if chunk.len() == chunk.capacity() {
+                chunks.push(mem::replace(&mut chunk, Vec::with_capacity(1024)));
+            }
         }
     }
 
-    println!("graph data loaded; {:?} edges", graph.len());
-    return graph;
-}
+    chunks.push(chunk);
 
-fn organize_graph(graph: &mut Vec<(u32, u32)>) {
+    // let mut map = HashMap::new();
+    // for chunk in &chunks {
+    //     for &(src, dst) in chunk {
+    //         let len = map.len();
+    //         map.entry(src).or_insert(len as u32);
+    //         let len = map.len();
+    //         map.entry(dst).or_insert(len as u32);
+    //     }
+    // }
 
-    for index in (0..graph.len()) {
-        if graph[index].1 < graph[index].0 {
-            graph[index] = (graph[index].1, graph[index].0);
-        }
+    // for chunk in &mut chunks {
+    //     for src_dst in chunk {
+    //         *src_dst = (map[&src_dst.0], map[&src_dst.1]);
+    //     }
+    // }
+
+    // determine the maximum node identifier.
+    // let mut max_node = 0;
+    // for chunk in &chunks {
+    //     for &(src,dst) in chunk {
+    //         if max_node < src { max_node = src; }
+    //         if max_node < dst { max_node = dst; }
+    //     }
+    // }
+
+    // // determine the undirected degree of each node.
+    // let mut degrees = vec![0; max_node as usize + 1];
+    // for chunk in &chunks {
+    //     for &(src, dst) in chunk {
+    //         degrees[src as usize] += 1;
+    //         degrees[dst as usize] += 1;
+    //     }
+    // }
+
+    // // swing edges from low degree to high degree.
+    // for chunk in &mut chunks {
+    //     for src_dst in chunk {
+    //         if degrees[src_dst.0 as usize] > degrees[src_dst.1 as usize] {
+    //             *src_dst = (src_dst.1, src_dst.0);
+    //         }
+    //     }
+    // }
+
+    // sort the edges by source then destination, and deduplicate them.
+    sorter.sort(&mut chunks, &|&(x,y)| ((x as u64) << 32) + (y as u64));
+    let mut prev = (u32::max_value(), u32::max_value());
+    for chunk in &mut chunks {
+        chunk.retain(|&(x,y)| if (x,y) != prev { prev = (x,y); true } else { false });
     }
 
-    graph.sort();
-    println!("graph data sorted; {:?} edges", graph.len());
-
-    graph.dedup();
-    println!("graph data uniqed; {:?} edges", graph.len());
-
-    // speeds things up a bit by tweaking edge directions.
-    // loses the src < dst property, which can be helpful.
-    redirect(graph);
-    graph.sort();
-    println!("graph data dirctd; {:?} edges", graph.len());
+    return chunks;
 }
 
-fn redirect(edges: &mut Vec<(u32, u32)>) {
-    let mut degrees = Vec::new();
-    for &(src, dst) in edges.iter() {
-        while src as usize >= degrees.len() { degrees.push(0); }
-        while dst as usize >= degrees.len() { degrees.push(0); }
-        degrees[src as usize] += 1;
-        degrees[dst as usize] += 1;
-    }
-
-    for index in (0..edges.len()) {
-        if degrees[edges[index].0 as usize] > degrees[edges[index].1 as usize] {
-            edges[index] = (edges[index].1, edges[index].0);
-        }
-    }
-}
-
-
-fn _extract_fragment<I: Iterator<Item=(u32, u32)>>(graph: I, index: u64, parts: u64) -> GraphVector<u32> {
+fn _extract_fragment<I: Iterator<Item=(u32, u32)>>(graph: I) -> GraphVector<u32> {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
+    nodes.push(0);
+    let mut max_dst = 0;
     for (src, dst) in graph {
-        if src as u64 % parts == index {
-            while src + 1 >= nodes.len() as u32 { nodes.push(0); }
-            while dst + 1 >= nodes.len() as u32 { nodes.push(0); } // allows unsafe access to nodes
+        // println!("{:?}", (src, dst));
+        if src == dst { println!("early error?"); }
+        while nodes.len() <= src as usize {
+            nodes.push(edges.len() as u64);
+        }
 
-            nodes[src as usize + 1] += 1;
-            edges.push(dst);
+        if max_dst < dst { max_dst = dst; }
+        edges.push(dst);
+    }
+
+    while nodes.len() <= (max_dst + 1) as usize { nodes.push(edges.len() as u64); }
+
+    println!("nodes.len(): {}", nodes.len());
+
+    let result = GraphVector { nodes: nodes, edges: edges };
+
+    for node in 0..(result.nodes.len() - 1) {
+        for &edge in &result.edges[result.nodes[node] as usize .. result.nodes[node + 1] as usize] {
+            if node == edge as usize {
+                println!("error? {} == {}", node, edge);
+            }
         }
     }
 
-    for index in (1..nodes.len()) {
-        nodes[index] += nodes[index - 1];
-    }
+    return result;
+}
 
-    return GraphVector { nodes: nodes, edges: edges };
+fn _print(graph: &GraphVector<u32>, _output: &str) {
+    // let mut edge_writer = BufWriter::new(File::create(output).unwrap());
+
+    let mut largest = 0;
+    for node in 0..graph.nodes() {
+        let edges = graph.edges(node);
+        if edges.len() > 0 {
+            let mut prev = edges[0];
+            print!("{}", prev);
+            for &edge in &edges[1..] {
+                if edge > largest { largest = edge; }
+                if edge > prev {
+                    print!(" {}", edge);
+                    prev = edge;
+                }
+            }
+            println!("");
+        }
+        else {
+            println!("");
+        }
+    }
+    for _ in graph.nodes()..(largest as usize) {
+        println!("");
+    }
 }
 
 fn _digest_graph_vector<E: Ord+Copy>(graph: &GraphVector<E>, output_prefix: &str) {

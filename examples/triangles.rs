@@ -1,3 +1,4 @@
+
 extern crate mmap;
 extern crate time;
 extern crate timely;
@@ -10,8 +11,7 @@ use dataflow_join::graph::{GraphTrait, GraphMMap, GraphExtenderExt};
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-
-// use timely::communication::Communicator;
+use timely::progress::timestamp::RootTimestamp;
 
 fn main () {
 
@@ -26,25 +26,40 @@ fn main () {
 
         let graph = Rc::new(GraphMMap::<u32>::new(&filename));
 
-        let mut input = root.scoped(|builder| {
+        let (mut input, probe) = root.scoped(|builder| {
 
-            let (input, stream) = builder.new_input::<u32>();
+            let (input, cliques) = builder.new_input::<u32>();
 
-            // extend u32s to pairs, then pairs to triples.
-            let triangles = stream.extend(vec![&graph.extend_using(|&a| a as u64)])
-                                  .flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
-                                  .extend(vec![&graph.extend_using(|&(a,_)| a as u64),
-                                               &graph.extend_using(|&(_,b)| b as u64)]);
+            // pairs
+            let cliques = cliques.extend(vec![&graph.extend_using(|&a| a as u64)]);
 
-            // // Quads
-            // triangles.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
-            //          .extend(vec![&graph.extend_using(|&((a,_),_)| a as u64),
-            //                       &graph.extend_using(|&((_,b),_)| b as u64),
-            //                       &graph.extend_using(|&((_,_),c)| c as u64)]);
+            // triangles
+            let cliques = cliques.flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
+                                 .extend(vec![&graph.extend_using(|&(a,_)| a as u64),
+                                              &graph.extend_using(|&(_,b)| b as u64)]);
 
-            if inspect { triangles.inspect(|x| println!("triangles: {:?}", x)); }
+            // // quadrangles?
+            // let cliques = cliques.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
+            //                      .extend(vec![&graph.extend_using(|&((a,_),_)| a as u64),
+            //                                   &graph.extend_using(|&((_,b),_)| b as u64),
+            //                                   &graph.extend_using(|&((_,_),c)| c as u64)]);
 
-            input
+            // // 5 cliques?
+            // let cliques = cliques.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
+            //                      .extend(vec![&graph.extend_using(|&(((a,_),_),_)| a as u64),
+            //                                   &graph.extend_using(|&(((_,b),_),_)| b as u64),
+            //                                   &graph.extend_using(|&(((_,_),c),_)| c as u64),
+            //                                   &graph.extend_using(|&(((_,_),_),d)| d as u64)]);
+
+            let mut count = 0;
+            if inspect {
+                cliques.inspect_batch(move |_t, b| {
+                    for x in b { count += x.1.len(); }
+                    println!("count: {}", count);
+                });
+            }
+
+            (input, cliques.probe().0)
         });
 
         let nodes = graph.nodes() - 1;
@@ -57,16 +72,11 @@ fn main () {
                 }
             }
 
-            // input.send_at(round, (0..step_size).map(|x| x + round * step_size)
-            //                                    .filter(|&x| x % peers == index)
-            //                                    .filter(|&x| x < nodes)
-            //                                    .map(|x| x as u32));
-
             input.advance_to(round as u64 + 1);
             root.step();
+            while probe.lt(&RootTimestamp::new((round - ::std::cmp::min(1, round)) as u64)) {
+                root.step();
+            }
         }
-
-        input.close();
-        while root.step() { }
     })
 }

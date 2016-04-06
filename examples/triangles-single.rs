@@ -16,9 +16,20 @@ fn main () {
 }
 
 fn raw_triangles<G: GraphTrait<Target=u32>>(graph: &G) -> u64 {
+
+    let mut count = 0;
+    for a in 0..graph.nodes() {
+        if graph.edges(a).len() > 0 {
+            count += 1;
+        }
+    }
+
+    println!("count: {}", count);
+
     let mut count = 0;
     for a in (0..graph.nodes()) {
         let aaa = graph.edges(a);
+        println!("degr[{}]: {}", a, aaa.len());
         for &b in aaa {
             let bbb = graph.edges(b as usize);
             count += if aaa.len() < bbb.len() { intersect(aaa, bbb) }

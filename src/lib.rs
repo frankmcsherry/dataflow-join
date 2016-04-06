@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+// #![allow(dead_code)]
 
 extern crate timely;
 extern crate time;
@@ -11,14 +11,10 @@ use timely::dataflow::operators::*;
 use timely::dataflow::channels::pact::Exchange;
 use timely::Data;
 
-use timely::drain::DrainExt;
-
 pub mod graph;
-mod typedrw;
-// pub mod flattener;
 
+mod typedrw;
 pub use typedrw::TypedMemoryMap;
-// use flattener::*;
 
 // Algorithm 3 is an implementation of an instance of GenericJoin, a worst-case optimal join algorithm.
 
@@ -105,7 +101,7 @@ where PE::Prefix: Data,
         let exch = Exchange::new(move |x| (*logic)(x));
         stream.unary_stream(exch, "Propose", move |input, output| {
             while let Some((time, data)) = input.next() {
-                output.session(&time).give_iterator(data.drain_temp().map(|p| {
+                output.session(&time).give_iterator(data.drain(..).map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
                     (p, vec)
