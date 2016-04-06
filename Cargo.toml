@@ -4,9 +4,12 @@ name = "dataflow-join"
 version = "0.0.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
+[dependencies.timely]
+git="http://github.com/frankmcsherry/timely-dataflow"
+
 [dependencies]
 # abomonation="*"
-timely="0.0.13"
+#timely="0.0.13"
 timely_sort="0.1.1"
 time = "*"
 mmap="*"
