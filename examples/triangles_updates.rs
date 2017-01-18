@@ -32,12 +32,13 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
+        let (mut inputG, mut inputQ, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
 
             // A dynamic graph is a stream of updates: `((src, dst), wgt)`.
             // Each triple indicates a change to the count of the number of arcs from
             // `src` to `dst`. Typically this change would be +/-1, but whatever.
             let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
+	          let (query, dQ) = builder.new_input::<((u32, u32), i32)>();
 
             // Our query is K3 = A(x,y) B(x,z) C(y,z): triangles.
             //
@@ -49,21 +50,24 @@ fn main () {
             // relation must not see updates for "later" relations (under some order on relations).
 
             // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.index();
-            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+            let (forward, f_handle) = dG.concat(&dQ).index();
+            let (reverse, r_handle) = dG.concat(&dQ).map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
-            let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.lt(t2))),
+            let dK3dA = dQ//.filter(|_| false)
+                          .extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.lt(t2))),
                                        Box::new(forward.extend_using(|&(_,y)| y as u64, |t1, t2| t1.lt(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,p.1,e), w)));
 
             // dB(x,z) extends to y first through A(x,y) then C(y,z), using forward and reverse indices, respectively.
-            let dK3dB = dG.extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.le(t2))),
+            let dK3dB = dQ//.filter(|_| false)
+                          .extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.le(t2))),
                                        Box::new(reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.lt(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,e,p.1), w)));
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let dK3dC = dG.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y as u64, |t1, t2| t1.le(t2))),
+            let dK3dC = dQ.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y as u64, |t1, t2| t1.le(t2))),
                                        Box::new(reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.le(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((e,p.0,p.1), w)));
 
@@ -75,15 +79,14 @@ fn main () {
                 cliques.exchange(|x| (x.0).0 as u64)
                        // .inspect_batch(|t,x| println!("{:?}: {:?}", t, x))
                        .count()
-                       .inspect_batch(move |t,x| println!("{:?}: {:?}", t, x))
+                       // .inspect_batch(move |t,x| println!("{:?}: {:?}", t, x))
                        .inspect_batch(move |_,x| { 
                             if let Ok(mut bound) = send.lock() {
                                 *bound += x[0];
                             }
                         });
             }
-
-            (graph, cliques.probe().0, f_handle, r_handle)
+            (graph, query, cliques.probe().0, f_handle, r_handle)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -102,29 +105,65 @@ fn main () {
         drop(graph);
 
         // synchronize with other workers.
-        let prev = input.time().clone();
-        input.advance_to(prev.inner + 1);
-        root.step_while(|| probe.lt(input.time()));
+        let prevG = inputG.time().clone();
+        inputG.advance_to(prevG.inner + 1);
+        inputQ.advance_to(prevG.inner + 1);
+        root.step_while(|| probe.lt(inputG.time()));
 
         // number of nodes introduced at a time
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
         // start the experiment!
-        let start = time::precise_time_s();
-        for node in 0 .. nodes {
+        let start = ::std::time::Instant::now();
+	    let limit = (95 * nodes /100) as usize ;
 
-            // introduce the node if it is this worker's responsibility
+        for node in 0 .. limit {
             if node % peers == index {
                 for &edge in &edges[node / peers] {
-                    input.send(((node as u32, edge), 1));
+                    inputG.send(((node as u32, edge), 1));
                 }
             }
+        }
 
-            // if at a batch boundary, advance time and do work.
+        let prevG = inputG.time().clone();
+        inputG.advance_to(prevG.inner + 1);
+        inputQ.advance_to(prevG.inner + 1);
+        root.step_while(|| probe.lt(inputG.time()));
+
+        if inspect { 
+            println!("{:?}\t[worker {}]\tdata loaded", start.elapsed(), index);
+        }
+
+        // merge all of the indices we maintain.
+        let prevG = inputG.time().clone();
+        forward.borrow_mut().merge_to(&prevG);
+        reverse.borrow_mut().merge_to(&prevG);
+
+        if inspect { 
+            println!("{:?}\t[worker {}]\tindices merged", start.elapsed(), index);
+        }
+
+        let prevG = inputG.time().clone();
+        inputG.advance_to(prevG.inner + 1);
+        inputQ.advance_to(prevG.inner + 1);
+        root.step_while(|| probe.lt(inputG.time()));
+
+        for node in limit .. nodes {
+
+            if node % peers == index {
+    		    for &edge in &edges[node / peers] {
+                   inputQ.send(((node as u32, edge), 1));
+    		    }
+            }
+
+    		// advance the graph stream (only useful in the first time)
+    		let prevG = inputG.time().clone();
+            inputG.advance_to(prevG.inner + 1);
+
             if node % batch == (batch - 1) {
-                let prev = input.time().clone();
-                input.advance_to(prev.inner + 1);
-                root.step_while(|| probe.lt(input.time()));
+                let prev = inputQ.time().clone();
+                inputQ.advance_to(prev.inner + 1);
+                root.step_while(|| probe.lt(inputQ.time()));
 
                 // merge all of the indices we maintain.
                 forward.borrow_mut().merge_to(&prev);
@@ -132,11 +171,12 @@ fn main () {
             }
         }
 
-        input.close();
+        inputG.close();
+	      inputQ.close();
         while root.step() { }
 
         if inspect { 
-            println!("worker {} elapsed: {:?}", index, time::precise_time_s() - start); 
+            println!("{:?}\t[worker {}]\tcomplete", start.elapsed(), index); 
         }
 
     }).unwrap();

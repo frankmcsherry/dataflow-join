@@ -1,146 +1,131 @@
-// #![allow(dead_code)]
+//! An incremental implementation of worst-case optimal joins.
+//!
+//! This crate contains functionality to construct timely dataflow computations to compute and maintain 
+//! the results of complex relational joins under changes to the relations, with worst-case optimality 
+//! guarantees about the running time.
+//! 
+//! As an example, consider a stream of directed graph edges `(src, dst)` where we would like to find all 
+//! directed cycles of length three. That is, node indentifiers `x0`, `x1`, and `x2` where the graph contains
+//! edges `(x0, x1)`, `(x1, x2)`, and `(x2, x0)`. We can write this query as a relational join on the edge
+//! relation `edge(x,y)`, as
+//!
+//!     cycle_3(x0, x1, x2) := edge(x0, x1), edge(x1, x2), edge(x2, x0)
+//!
+//! To determine the set of three-cycles, we could use standard techniques from the database literature to 
+//! perform the join, typically first picking one attribute (`x0`, `x1`, or `x2`) and performing the join on
+//! the two relations containing that attribute, then joining (intersecting) with the remaining relation.
+//! 
+//! This has the defect that it may perform an amount of work quadratic in the size of `edges`. Recent work 
+//! on "worst-case optimal join processing" shows how to get around this problem, by considering multiple 
+//! relations at the same time.
+//!
+//! This crate is a streaming implementation of incremental worst-case optimal join processing. You may 
+//! indicate a relational query like above, and the crate with synthesize a timely dataflow computation which
+//! reports all changes to the occurrences of satisfying assignments to the values. The amount of work performed
+//! is no more than the worst-case optimal bound.
+//!
+//! #Example
+//! ```
+//! fn main () {
+//!    
+//!     // start up a timely dataflow computation
+//!     timely::execute_from_args(std::env::args(), move |root| {
+//!
+//!         // build the dataflow graph, return input and output.
+//!         let (edges, probe) = root.scoped(|scope| {
+//!
+//!             // construct an input for edge changes.
+//!             let (input, edges) = scope.new_input();
+//!
+//!             // index the edge relation by first and second fields.
+//!             let (forward, forward_handle) = edges.concat(&query).index();
+//!             let (reverse, reverse_handle) = edges.concat(&query)
+//!                                                  .map(|((src,dst),wgt)| ((dst,src),wgt))
+//!                                                  .index();
+//!
+//!             // construct the motif dataflow subgraph.
+//!             let motif = vec![(0,1), (1,2), (2,0)];
+//!             let cycles = general_motif(motif, &edges, &forward, &reverse);
+//! 
+//!             // count cycles, print, return status of the result.
+//!             let probe = cycles.count()
+//!                               .inspect(|x| println("found: {:?}", x))
+//!                               .probe().0;
+//!
+//!             (input, probe)
+//!         });         
+//!
+//!         // now supply a stream of changes to the graph.         
+//!         edges.send(((0, 1), 1));
+//!         edges.send(((1, 2), 1));
+//!         edges.send(((2, 0), 1));
+//!         edges.advance_to(1);
+//!         root.step_while(|| probe.lt(&edges.time()));
+//!         // should report `(0, 1, 2)`.
+//!
+//!         edges.send(((0, 0), 1));
+//!         edges.advance_to(2);
+//!         root.step_while(|| probe.lt(&edges.time()));
+//!         // should report `(0, 0, 0)`
+//!
+//!         edges.send(((0, 1), -1));
+//!         edges.advance_to(2);
+//!         root.step_while(|| probe.lt(&edges.time()));
+//!         // should report `(0, 1, 2)` with a negative update.
+//!     }
+//! }
+//! ```
 
 extern crate timely;
 extern crate time;
-extern crate mmap;
-
-use std::rc::Rc;
+extern crate fnv;
+extern crate timely_sort;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
-use timely::dataflow::channels::pact::Exchange;
 use timely::Data;
 
-pub mod graph;
+mod index;
+mod extender;
+pub mod motif;
 
-mod typedrw;
-pub use typedrw::TypedMemoryMap;
+pub use index::Index;
+pub use extender::{IndexStream, Indexable};
 
-// Algorithm 3 is an implementation of an instance of GenericJoin, a worst-case optimal join algorithm.
-
-// The algorithm orders the attributes of the resulting relation, and for each prefix of these attributes
-// produces the set of viable prefixes of output relations. The set of prefixes is updated by a new attribute
-// by having each relation with that attribute propose extensions for each prefix, based on matching existing
-// attributes within their relation. Proposals are then intersected, and surviving extended prefixes form the
-// basis of the next iteration
-
-
-// Informally, the algorithm looks like:
-// 0. Let X be an empty relation over 0 attributes
-// 1. For each output attribute A:
-//     0. Let T be an initially empty set.
-//     a. For each relation R containing A:
-//         i. For each element x of X, let p(R, x) be the set of distinct values of A in pi_A(R join x),
-//            that is, the distinct symbols R would propose to extend x.
-//     b. For each element x of X, let r(x) be the relation R with the smallest p(R, x).
-//     c. For each relation R containing A:
-//         i. For each element x of X with r(x) = R, add (x join p(R, x)) to T.
-//     d. For each relation R containing A:
-//         i. For each element (x, y) of T, remove (x, y) if y is not in p(R, x).
-//
-// The important part of this algorithm is that step d.i should take roughly constant time.
-
-
-// record-by-record prefix extension functionality
-pub trait PrefixExtender {
-    type Prefix;
-    type Extension;
-
-    // these are the parts required for the join algorithm
-    fn count(&self, &Self::Prefix) -> u64;
-    fn propose(&self, &Self::Prefix, &mut Vec<Self::Extension>);
-    fn intersect(&self, &Self::Prefix, &mut Vec<Self::Extension>);
-
-    // these are needed to tell timely dataflow how to route prefixes.
-    // this object will be shared under an Rc<RefCell<...>> so we want
-    // to give back a function, rather than provide a method ourself.
-    type RoutingFunction: Fn(&Self::Prefix)->u64+'static;
-    fn logic(&self) -> Rc<Self::RoutingFunction>;
-}
-
-// functionality required by the GenericJoin layer
+/// Functionality used by GenericJoin to extend prefixes with new attributes.
+///
+/// These methods are used in `GenericJoin`'s `extend` method, and may not be broadly useful elsewhere.
 pub trait StreamPrefixExtender<G: Scope> {
+    /// The type of data to extend.
     type Prefix: Data;
+    /// The type of the extentions.
     type Extension: Data;
-
-    fn count(&self, Stream<G, (Self::Prefix, u64, u64)>, u64) -> Stream<G, (Self::Prefix, u64, u64)>;
-    fn propose(&self, Stream<G, Self::Prefix>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)>;
-    fn intersect(&self, Stream<G, (Self::Prefix, Vec<Self::Extension>)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)>;
+    /// Updates each prefix with an upper bound on the number of extensions for this relation.
+    fn count(&self, Stream<G, (Self::Prefix, u64, u64, i32)>, u64) -> Stream<G, (Self::Prefix, u64, u64, i32)>;
+    /// Proposes each extension from this relation.
+    fn propose(&self, Stream<G, (Self::Prefix, i32)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)>;
+    /// Restricts proposals by those this relation would propose.
+    fn intersect(&self, Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)>;
 }
 
-// implementation of StreamPrefixExtender for any (wrapped) PrefixExtender
-// TODO : Add a Rc<RefCell<Vec<Vec<Self::Extension>>>> to recycle allocations
-impl<G: Scope, PE: PrefixExtender+'static> StreamPrefixExtender<G> for Rc<PE>
-where PE::Prefix: Data,
-      PE::Extension: Data, {
-    type Prefix = PE::Prefix;
-    type Extension = PE::Extension;
-
-    fn count(&self, stream: Stream<G, (Self::Prefix, u64, u64)>, ident: u64) -> Stream<G, (Self::Prefix, u64, u64)> {
-        let clone = self.clone();
-        let logic = self.logic();
-        let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
-        stream.unary_stream(exch, "Count", move |input, output| {
-            while let Some((time, data)) = input.next() {
-                for &mut (ref p, ref mut c, ref mut i) in data.iter_mut() {
-                    let nc = (*clone).count(p);
-                    if &nc < c {
-                        *c = nc;
-                        *i = ident;
-                    }
-                }
-                data.retain(|x| x.1 > 0);
-                output.session(&time).give_content(data);
-            }
-        })
-    }
-
-    fn propose(&self, stream: Stream<G, Self::Prefix>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)> {
-        let clone = self.clone();
-        let logic = self.logic();
-        let exch = Exchange::new(move |x| (*logic)(x));
-        stream.unary_stream(exch, "Propose", move |input, output| {
-            while let Some((time, data)) = input.next() {
-                output.session(&time).give_iterator(data.drain(..).map(|p| {
-                    let mut vec = Vec::new();
-                    (*clone).propose(&p, &mut vec);
-                    (p, vec)
-                }));
-            }
-        })
-    }
-    fn intersect(&self, stream: Stream<G, (Self::Prefix, Vec<Self::Extension>)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)> {
-        let logic = self.logic();
-        let clone = self.clone();
-        let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
-        stream.unary_stream(exch, "Intersect", move |input, output| {
-            while let Some((time, data)) = input.next() {
-                for &mut (ref prefix, ref mut extensions) in data.iter_mut() {
-                    (*clone).intersect(prefix, extensions);
-                }
-                data.retain(|x| x.1.len() > 0);
-                output.session(&time).give_content(data);
-            }
-        })
-    }
-}
-
-pub trait GenericJoinExt<G:Scope, P:Data> {
-    fn extend<E: Data>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
-        -> Stream<G, (P, Vec<E>)>;
+/// Extension method for generic join functionality.
+pub trait GenericJoin<G:Scope, P:Data> {
+    /// Extends a stream of prefixes using the supplied prefix extenders.
+    fn extend<'a, E: Data>(&self, extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=E>+'a>>)
+        -> Stream<G, (P, Vec<E>, i32)>;
 }
 
 // A layer of GenericJoin, in which a collection of prefixes are extended by one attribute
-impl<G: Scope, P:Data> GenericJoinExt<G, P> for Stream<G, P> {
-    fn extend<E: Data>(self, extenders: Vec<&StreamPrefixExtender<G, Prefix=P, Extension=E>>)
-        -> Stream<G, (P, Vec<E>)> {
+impl<G: Scope, P:Data> GenericJoin<G, P> for Stream<G, (P, i32)> {
+    fn extend<'a, E>(&self, extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=E>+'a>>) -> Stream<G, (P, Vec<E>, i32)> 
+    where E: Data {
 
-        let mut counts = self.map(|p| (p, 1 << 31, 0));
+        let mut counts = self.map(|(p,s)| (p, 1 << 31, 0, s));
         for (index,extender) in extenders.iter().enumerate() {
             counts = extender.count(counts, index as u64);
         }
 
-        let parts = counts.partition(extenders.len() as u64, |(p, _, i)| (i, p));
+        let parts = counts.partition(extenders.len() as u64, |(p, _, i, w)| (i, (p, w)));
 
         let mut results = Vec::new();
         for (index, nominations) in parts.into_iter().enumerate() {
@@ -152,6 +137,41 @@ impl<G: Scope, P:Data> GenericJoinExt<G, P> for Stream<G, P> {
             results.push(extensions);    // save extensions
         }
 
-        self.scope().concatenate(results)
+        self.scope().concatenate(results).map(|(p,es,w)| (p,es,w))
     }
+}
+
+/// Reports the number of elements satisfing the predicate.
+///
+/// This methods *relies strongly* on the assumption that the predicate
+/// stays false once it becomes false, a joint property of the predicate
+/// and the slice. This allows `advance` to use exponential search to 
+/// count the number of elements in time logarithmic in the result.
+#[inline(never)]
+pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
+
+    // start with no advance
+    let mut index = 0;
+    if index < slice.len() && function(&slice[index]) {
+
+        // advance in exponentially growing steps.
+        let mut step = 1;
+        while index + step < slice.len() && function(&slice[index + step]) {
+            index += step;
+            step = step << 1;
+        }
+
+        // advance in exponentially shrinking steps.
+        step = step >> 1;
+        while step > 0 {
+            if index + step < slice.len() && function(&slice[index + step]) {
+                index += step;
+            }
+            step = step >> 1;
+        }
+
+        index += 1;
+    }   
+
+    index
 }
