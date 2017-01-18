@@ -16,7 +16,7 @@ pub struct Index<T> {
 ///
 /// The `edge_list` member is a sequence of sorted runs of the form
 /// 
-///     [(e1,w1), (e2,w2), ... (len, 0)]^*
+/// [(e1,w1), (e2,w2), ... (len, 0)]^*
 ///
 /// where `len` is the number of edge entries. There may be multiple runs, which can be
 /// found by starting from the last entry and stepping forward guided by `len` entries.

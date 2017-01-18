@@ -11,9 +11,6 @@ use alg3_dynamic::*;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
-use graph_map::GraphMMap;
-
-
 use std::io::BufReader;
 use std::error::Error;
 use std::fs::File;
@@ -63,19 +60,19 @@ fn main () {
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
             let dK3dA = dQ//.filter(|_| false)
-                          .extend(vec![&forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.lt(t2)),
-                                       &forward.extend_using(|&(_,y)| y as u64, |t1, t2| t1.lt(t2))])
+                          .extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.lt(t2))),
+                                       Box::new(forward.extend_using(|&(_,y)| y as u64, |t1, t2| t1.lt(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,p.1,e), w)));
 
             // dB(x,z) extends to y first through A(x,y) then C(y,z), using forward and reverse indices, respectively.
             let dK3dB = dQ//.filter(|_| false)
-                          .extend(vec![&forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.le(t2)),
-                                       &reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.lt(t2))])
+                          .extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.le(t2))),
+                                       Box::new(reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.lt(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,e,p.1), w)));
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let dK3dC = dQ.extend(vec![&reverse.extend_using(|&(y,_)| y as u64, |t1, t2| t1.le(t2)),
-                                       &reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.le(t2))])
+            let dK3dC = dQ.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y as u64, |t1, t2| t1.le(t2))),
+                                       Box::new(reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.le(t2)))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((e,p.0,p.1), w)));
 
             // accumulate all changes together

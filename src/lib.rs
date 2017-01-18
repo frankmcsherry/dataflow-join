@@ -9,7 +9,7 @@
 //! edges `(x0, x1)`, `(x1, x2)`, and `(x2, x0)`. We can write this query as a relational join on the edge
 //! relation `edge(x,y)`, as
 //!
-//!     cycle_3(x0, x1, x2) := edge(x0, x1), edge(x1, x2), edge(x2, x0)
+//! cycle_3(x0, x1, x2) := edge(x0, x1), edge(x1, x2), edge(x2, x0)
 //!
 //! To determine the set of three-cycles, we could use standard techniques from the database literature to 
 //! perform the join, typically first picking one attribute (`x0`, `x1`, or `x2`) and performing the join on
@@ -25,7 +25,8 @@
 //! is no more than the worst-case optimal bound.
 //!
 //! #Example
-//! ```
+//!
+//! ```ignore
 //! fn main () {
 //!    
 //!     // start up a timely dataflow computation
