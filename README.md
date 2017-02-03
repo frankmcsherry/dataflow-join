@@ -147,7 +147,7 @@ This took longer, but there were also a larger number of the motifs to process.
 
 ### Directed 6-cliques
 
-You can imagine where this is going, but I thought I'd do this example because it is something that seems is much to complicated to compute completely and then difference.
+You can imagine where this is going, but I thought I'd do this example because it is something that seems is much too complicated to compute completely and then difference. Here we stream edge updates in one at a time (a batch size of one).
 
 	Echidnatron% cargo run --release --example motif -- 15 0 1 0 2 0 3 0 4 0 5 1 2 1 3 1 4 1 5 2 3 2 4 2 5 3 4 3 5 4 5 soc-LiveJournal1.random.txt 68900000 1 inspect
 	    Finished release [optimized + debuginfo] target(s) in 0.0 secs
