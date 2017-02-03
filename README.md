@@ -171,4 +171,33 @@ You can imagine where this is going, but I thought I'd do this example because i
 
 This program goes to 11. 
 
-But just 11. What happened? As it turns out, the 12th update causes so many changed 6-cliques (or candidates along the way) that the process wanders up to 60GB on my laptop and then shuts itself down. This is an exciting open area for us, where the answer lies in [recent scheduling work](https://people.inf.ethz.ch/zchothia/papers/faucet-beyondmr16.pdf) with Andrea Lattuada and Zaheer Chothia that prioritizes operators further down the dataflow graph, aggressively draining the dataflow rather than producing more work. In principle we should be able to try this out and see what happens!
+But just 11. What happened? As it turns out, the 12th update causes so many changed 6-cliques (or candidates along the way) that the process wanders up to 60GB on my laptop and then shuts itself down. 
+
+For comparison, here are the output numbers for 5-cliques, where the 12th update produces 48,807,868 updates. Each of these updates are produced along the way in the 6-clique dataflow (which just extends the 5-clique dataflow), and each apparently leads to some large number of further candidates.
+
+	Echidnatron% cargo run --release --example motif -- 10 0 1 0 2 0 3 0 4 1 2 1 3 1 4 2 3 2 4 3 4 ./soc-LiveJournal1.random.txt 68900000 1 inspect
+	    Finished release [optimized + debuginfo] target(s) in 0.0 secs
+	     Running `target/release/examples/motif 10 0 1 0 2 0 3 0 4 1 2 1 3 1 4 2 3 2 4 3 4 ./soc-LiveJournal1.random.txt 68900000 1 inspect`
+	motif:	[(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+	filename:	"./soc-LiveJournal1.random.txt"
+	index initialized: (4307203, 68900000)
+	index initialized: (4487812, 68900000)
+	Duration { secs: 36, nanos: 387479783 }	[worker 0]	data loaded
+	Duration { secs: 36, nanos: 387815357 }	[worker 0]	indices merged
+	(Root, 2): [131]
+	(Root, 3): [53]
+	(Root, 5): [1570]
+	(Root, 6): [11081]
+	(Root, 7): [4]
+	(Root, 8): [574]
+	(Root, 9): [67]
+	(Root, 10): [6197]
+	(Root, 11): [952]
+	(Root, 12): [48807868]
+	(Root, 13): [3612]
+	(Root, 14): [470]
+	...
+
+The problem is that, even though we are streaming in single updates, we try and do all of the count, propose, and intersect work for these 48 million tuples at the same time. What we *should* be doing, in a better world, is stream through the 48 million bits of intermediate work as well. We should stage them so that we don't try and do all of the work at once, but rather retire chunks of updates at a time, keeping our resource use in check.
+
+This is an exciting open area for us, where the answer lies in [recent scheduling work](https://people.inf.ethz.ch/zchothia/papers/faucet-beyondmr16.pdf) with Andrea Lattuada and Zaheer Chothia that prioritizes operators further down the dataflow graph, aggressively draining the dataflow rather than producing more work. In principle we should be able to try this out and see what happens!
