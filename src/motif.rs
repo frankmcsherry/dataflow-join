@@ -63,12 +63,11 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
 
     /// Constructs a dataflow subgraph to track a described motif.
     pub fn track_motif<'a>(&self, description: &[(usize, usize)]) -> Stream<G, (Vec<u32>, i32)> where G: 'a {
-        let mut result: Option<Stream<G, (Vec<u32>, i32)>> = None;
+        let mut result = self.updates.filter(|_| false).map(|_| (Vec::new(), 0));
         for relation in 0 .. description.len() {
-            let stream = self.relation_update(relation, &description);
-            result = result.map(|x| x.concat(&stream)).or(Some(stream));
+            result = result.concat(&self.relation_update(relation, &description));
         }
-        result.unwrap()
+        result
     }
 }
 
@@ -95,26 +94,29 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
         let (attrs, _remap, relations) = order_attributes(relation, &relations);
         let query_plan = plan_query(&relations, relation);
 
-        // we do the first extension using arrays rather than vecs, to prove a point.
-        let stream = self.updates.map(|((x,y),w)| ([x, y], w));
-        let mut stream = self.extend_attribute(&stream, &query_plan[0])
+        let source = self.updates.map(|((x,y),w)| ([x, y], w));
+        let stream = if query_plan.len() > 0 {
+
+            // we do the first extension using arrays rather than vecs, to prove a point.
+            let mut stream = self.extend_attribute(&source, &query_plan[0])
+                                 .flat_map(|(p, es, w)| es.into_iter().map(move |e| (vec![p[0], p[1], e], w)));
+
+            // now stream contains vecs, and so we use vec extensions4.
+            for stage in &query_plan[1..] { 
+                stream = self.extend_attribute(&stream, &stage)
                              .flat_map(|(p, es, w)|
                                     es.into_iter().map(move |e|  {
-                                        (vec![p[0], p[1], e], w)
-                                    })      
-                             );
+                                       let mut clone = p.clone();
+                                       clone.push(e);
+                                       (clone, w)
+                                    }));
+            }
 
-        // now stream contains vecs, and so we use vec extensions4.
-        for stage in &query_plan[1..] { 
-            stream = self.extend_attribute(&stream, &stage)
-                         .flat_map(|(p, es, w)|
-                                es.into_iter().map(move |e|  {
-                                   let mut clone = p.clone();
-                                   clone.push(e);
-                                   (clone, w)
-                                })      
-                           );
+            stream
         }
+        else {
+            source.map(|p| (vec![p.0[0], p.0[1]], p.1))
+        };
 
         // undo the attribute re-ordering.
         stream.map(move |(vec, w)| {
