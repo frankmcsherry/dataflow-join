@@ -10,6 +10,8 @@ use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::progress::Timestamp;
 
+use timely_sort::LSBRadixSorter;
+
 use {Index, StreamPrefixExtender};
 
 /// A pair of update stream and update index.
@@ -219,7 +221,9 @@ impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp:
         let index_a3 = index_a1.clone();
 
         let mut map = HashMap::new();
-        let mut initial = Vec::new();
+        // let mut initial = Vec::new();
+
+        let mut sorter = Some(LSBRadixSorter::new());
 
         let exch1 = Exchange::new(|&((x,_y),_w)| x as u64);
         let exch2 = Exchange::new(|&(x,_y)| x as u64);
@@ -234,14 +238,20 @@ impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp:
 
             // populate initial collection
             input2.for_each(|time, data| {
-                initial.extend(data.drain(..));
-                notificator.notify_at(time);
+                if let Some(ref mut sorter) = sorter {
+                    sorter.push_batch(data.replace_with(Vec::new()), &|&(x,y)| ((x as u64) << 32) + (y as u64));
+                    notificator.notify_at(time);
+                }
             });
 
             notificator.for_each(|time,_,_| {
                 // initialize if this is the first time
-                if initial.len() > 0 {
-                    index.initialize(&mut initial);
+                if let Some(mut sorter) = sorter.take() {
+                    let timer = ::std::time::Instant::now();
+                    let mut sorted = sorter.finish(&|&(x,y)| ((x as u64) << 32) + (y as u64));
+                    println!("{:?}\tsorting complete", timer.elapsed());
+                    index.initialize(&mut sorted);
+                    println!("{:?}\tinitialization complete", timer.elapsed());
                 }
                 // push updates if updates exist
                 if let Some(mut list) = map.remove(&time.time()) {

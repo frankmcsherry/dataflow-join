@@ -488,39 +488,43 @@ impl<Key: Ord+Hash+Copy, T: Ord+Clone> Index<Key, T> {
 
     /// Sets an initial collection of positive counts, which we can compact.
     #[inline(never)]
-    pub fn initialize(&mut self, initial: &mut Vec<(Key, u32)>) {
+    pub fn initialize(&mut self, initial: &mut Vec<Vec<(Key, u32)>>) {
 
         if self.compact.0.len() > 0 || self.edges.len() > 0 || self.diffs.len() > 0 {
             panic!("re-initializing active index");
         }
 
         // perhaps we should use a radix sort here, to avoid extra memory allocation?
-        initial.sort();
+        // initial.sort();
 
-        self.compact.1 = Vec::with_capacity(initial.len());
+        let length = initial.iter().map(|x| x.len()).sum();
+        self.compact.1 = Vec::with_capacity(length);
 
-        self.compact.1.push(initial[0].1);
-        for index in 1 .. initial.len() {
-            if initial[index].0 != initial[index-1].0 {
-                self.compact.0.push((initial[index-1].0, index));
+        for batch in initial.drain(..) {
+            for (key, val) in batch {
+                self.compact.1.push(val);
+                let idx = self.compact.0.len();
+                if idx == 0 || key != self.compact.0[idx-1].0 {
+                    self.compact.0.push((key, self.compact.1.len()));
+                }
+                else {
+                    self.compact.0[idx-1].1 = self.compact.1.len();
+                }
             }
-            self.compact.1.push(initial[index].1)
         }
-        self.compact.0.push((initial[initial.len()-1].0, initial.len()));
 
-        // for (key, val) in initial.drain(..) {
-        //     self.compact.1.push(val);
-        //     // if the key is new (or first), push the key. In either case, update bounding offset.
-        //     if self.compact.0.len() == 0 || key != self.compact.0[self.compact.0.len() - 1].0 {
-        //         self.compact.0.push((key, self.compact.1.len()));
+        // self.compact.1 = Vec::with_capacity(initial.len());
+        // self.compact.1.push(initial[0].1);
+        // for index in 1 .. initial.len() {
+        //     if initial[index].0 != initial[index-1].0 {
+        //         self.compact.0.push((initial[index-1].0, index));
         //     }
-        //     else {
-        //         let len = self.compact.0.len() - 1;
-        //         self.compact.0[len].1 = self.compact.1.len();
-        //     }
+        //     self.compact.1.push(initial[index].1)
         // }
+        // self.compact.0.push((initial[initial.len()-1].0, initial.len()));
+
         *initial = Vec::new();
 
-        println!("index initialized: ({}, {})", self.compact.0.len(), self.compact.1.len());
+        // println!("index initialized: ({}, {})", self.compact.0.len(), self.compact.1.len());
     }
 }
