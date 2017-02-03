@@ -45,8 +45,8 @@ fn main () {
         // load fragment of input graph into memory to avoid io while running.
         let filename = std::env::args().nth(2 * (query_size) + 2).unwrap();
         let pre_load = std::env::args().nth(2 * (query_size) + 3).unwrap().parse().unwrap();
-        let load_batch: usize = std::env::args().nth(2 * (query_size) + 4).unwrap().parse().unwrap();
-        let query_batch: usize = std::env::args().nth(2 * (query_size) + 5).unwrap().parse().unwrap();
+        // let load_batch: usize = std::env::args().nth(2 * (query_size) + 4).unwrap().parse().unwrap();
+        let query_batch: usize = std::env::args().nth(2 * (query_size) + 4).unwrap().parse().unwrap();
 
         println!("motif:\t{:?}", motif);
         println!("filename:\t{:?}", filename);
@@ -55,7 +55,7 @@ fn main () {
         let (mut input_graph, mut input_delta, probe, handles) = root.scoped::<Node,_,_>(move |builder| {
 
             // inputs for initial edges and changes to the edge set, respectively.
-            let (graph_input, graph) = builder.new_input::<((Node, Node), i32)>();
+            let (graph_input, graph) = builder.new_input::<(Node, Node)>();
             let (delta_input, delta) = builder.new_input::<((Node, Node), i32)>();
             
             // create indices and handles from the initial edges plus updates.
@@ -94,7 +94,6 @@ fn main () {
 
         // load up the graph, using the first `limit` lines in the file.
         for (counter, line) in lines.by_ref().take(pre_load).enumerate() {
-
             // each worker is responsible for a fraction of the queries
             if counter % peers == index {
                 let good_line = line.ok().expect("EXCEPTION: read error");
@@ -102,17 +101,8 @@ fn main () {
                     let mut elements = good_line[..].split_whitespace();
                     let src: Node = elements.next().unwrap().parse().ok().expect("malformed src");
                     let dst: Node = elements.next().unwrap().parse().ok().expect("malformed dst");
-                    input_graph.send(((src, dst), 1));
+                    input_graph.send((src, dst));
                 }
-            }
-
-            // synchronize and merge indices, to keep buffers in check.
-            if counter % load_batch == (load_batch - 1) {
-               let prev_time = input_graph.time().clone();
-               input_graph.advance_to(prev_time.inner + 1);
-               input_delta.advance_to(prev_time.inner + 1);
-               root.step_while(|| probe.lt(input_delta.time()));
-               handles.merge_to(&prev_time);
             }
         }
 
@@ -122,6 +112,8 @@ fn main () {
         input_delta.advance_to(prev_time.inner + 1);
         root.step_while(|| probe.lt(input_graph.time()));
         println!("{:?}\t[worker {}]\tdata loaded", start.elapsed(), index);
+
+        // loop { }
 
         // merge all of the indices the worker maintains.
         let prev_time = input_graph.time().clone();

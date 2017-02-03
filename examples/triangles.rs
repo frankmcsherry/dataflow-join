@@ -34,9 +34,7 @@ fn main () {
         // handles to input and probe, but also both indices so we can compact them.
         let (mut input, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
 
-            // A dynamic graph is a stream of updates: `((src, dst), wgt)`.
-            // Each triple indicates a change to the count of the number of arcs from
-            // `src` to `dst`. Typically this change would be +/-1, but whatever.
+            // Please see triangles for more information on "graph" and dG.
             let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
 
             // Our query is K3 = A(x,y) B(x,z) C(y,z): triangles.
@@ -49,8 +47,8 @@ fn main () {
             // relation must not see updates for "later" relations (under some order on relations).
 
             // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.index();
-            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+            let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
+            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.filter(|_| false).map(|_| (0,0)));
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
             let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(x,_)| x as u64, |t1, t2| t1.lt(t2))),

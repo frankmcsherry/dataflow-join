@@ -43,14 +43,14 @@ fn main () {
             // The dataflow has 6 derivatives, with respect to each relation:
             // dQdA := dA x B x C x D x E x F
             // dQdB := dB x A x C x D x E x F
-	    // dQdC := dC x A x B x D x E x F
-	    // dQdD := dD x A x B x C x E x F
-	    // dQdE := dE x A x B x C x D x F
-	    // dQdF := dF x A x B x C x D x E
-            
+            // dQdC := dC x A x B x D x E x F
+            // dQdD := dD x A x B x C x E x F
+            // dQdE := dE x A x B x C x D x F
+            // dQdF := dF x A x B x C x D x E
+
             // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.index();
-            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+            let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
+            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.filter(|_| false).map(|_| (0,0)));
 
             // We then pick an ordering of attributes for each derivative:
             // dQdA: we start with dA(a1, a2) and extend to a3 and then to a4. So there will be 2 extensions:

@@ -148,7 +148,7 @@ impl<G: Scope, P:Data> GenericJoin<G, P> for Stream<G, (P, i32)> {
 /// stays false once it becomes false, a joint property of the predicate
 /// and the slice. This allows `advance` to use exponential search to 
 /// count the number of elements in time logarithmic in the result.
-#[inline(never)]
+// #[inline(never)]
 pub fn advance<T, F: Fn(&T)->bool>(slice: &[T], function: F) -> usize {
 
     // start with no advance

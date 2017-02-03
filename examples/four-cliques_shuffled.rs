@@ -37,12 +37,12 @@ fn main () {
         let (mut input_graph, mut input_query, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
 
             // Please see triangles for more information on `graph_input` and `graph`.
-            let (graph_input, graph) = builder.new_input::<((u32, u32), i32)>();
+            let (graph_input, graph) = builder.new_input::<(u32, u32)>();
             let (query_input, query) = builder.new_input::<((u32, u32), i32)>();
             
             // index the graph relation by first and second fields.
-            let (forward, forward_handle) = graph.concat(&query).index();
-            let (reverse, reverse_handle) = graph.concat(&query).map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+            let (forward, forward_handle) = query.index_from(&graph);
+            let (reverse, reverse_handle) = query.map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&graph.map(|(src,dst)| (dst,src)));
 
             // construct the four_cliques dataflow subgraph.
             let cliques = cliques_4(&query, &forward, &reverse);
@@ -96,7 +96,7 @@ fn main () {
                     let mut elements = good_line[..].split_whitespace();
                     let src: u32 = elements.next().unwrap().parse().ok().expect("malformed src");
                     let dst: u32 = elements.next().unwrap().parse().ok().expect("malformed dst");
-                    input_graph.send(((src, dst), 1));
+                    input_graph.send((src, dst));
                 }
             }
 

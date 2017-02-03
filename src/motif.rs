@@ -8,6 +8,9 @@
 //! `(x0, x1)`, `(x0,x2)`, and `(x1, x2)`. In a larger graph, each setting of these three variables so that the three edges
 //! exist is an instance of the triangle motif.
 
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use timely::Data;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
@@ -18,8 +21,8 @@ use ::{IndexStream, StreamPrefixExtender, GenericJoin};
 
 /// Handles to the forward and reverse graph indices.
 pub struct GraphStreamIndexHandle<T> {
-    forward: ::std::rc::Rc<::std::cell::RefCell<Index<T>>>,
-    reverse: ::std::rc::Rc<::std::cell::RefCell<Index<T>>>,
+    forward: Rc<RefCell<Index<u32, T>>>,
+    reverse: Rc<RefCell<Index<u32, T>>>,
 }
 
 impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
@@ -41,10 +44,11 @@ pub struct GraphStreamIndex<G: Scope>
 impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
 
     /// Constructs a new graph stream index from initial edges and an update stream.
-    pub fn from(initially: Stream<G, ((u32, u32), i32)>, 
+    pub fn from(initially: Stream<G, (u32, u32)>, 
                 updates: Stream<G, ((u32, u32), i32)>) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
-        let (forward, f_handle) = initially.concat(&updates).index();
-        let (reverse, r_handle) = initially.concat(&updates).map(|((src,dst),wgt)| ((dst,src),wgt)).index();
+        let (forward, f_handle) = updates.index_from(&initially);
+        let (reverse, r_handle) = updates.map(|((src,dst),wgt)| ((dst,src),wgt))
+                                         .index_from(&initially.map(|(src,dst)| (dst,src)));
         let index = GraphStreamIndex {
             updates: updates,
             forward: forward,

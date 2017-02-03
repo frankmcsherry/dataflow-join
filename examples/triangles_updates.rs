@@ -37,8 +37,8 @@ fn main () {
             // A dynamic graph is a stream of updates: `((src, dst), wgt)`.
             // Each triple indicates a change to the count of the number of arcs from
             // `src` to `dst`. Typically this change would be +/-1, but whatever.
-            let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
-	          let (query, dQ) = builder.new_input::<((u32, u32), i32)>();
+            let (graph, dG) = builder.new_input::<(u32, u32)>();
+            let (query, dQ) = builder.new_input::<((u32, u32), i32)>();
 
             // Our query is K3 = A(x,y) B(x,z) C(y,z): triangles.
             //
@@ -50,9 +50,12 @@ fn main () {
             // relation must not see updates for "later" relations (under some order on relations).
 
             // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.concat(&dQ).index();
-            let (reverse, r_handle) = dG.concat(&dQ).map(|((src,dst),wgt)| ((dst,src),wgt)).index();
-
+            let (forward, f_handle) = dQ.index_from(&dG);
+            let (reverse, r_handle) = { 
+                let dGr = dG.map(|(src,dst)| (dst,src));
+                let dQr = dQ.map(|((src,dst),wgt)| ((dst,src),wgt));
+                dQr.index_from(&dGr)
+            };
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
             let dK3dA = dQ//.filter(|_| false)
@@ -120,7 +123,7 @@ fn main () {
         for node in 0 .. limit {
             if node % peers == index {
                 for &edge in &edges[node / peers] {
-                    inputG.send(((node as u32, edge), 1));
+                    inputG.send((node as u32, edge));
                 }
             }
         }

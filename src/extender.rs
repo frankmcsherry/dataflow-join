@@ -6,7 +6,7 @@ use std::fmt::Debug;
 
 use timely::Data;
 use timely::dataflow::{Stream, Scope};
-use timely::dataflow::operators::{Unary, Binary};
+use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::progress::Timestamp;
 
@@ -19,7 +19,7 @@ use {Index, StreamPrefixExtender};
 /// the `get_index()` method, to ensure that you don't write to it here.
 pub struct IndexStream<G: Scope> where G::Timestamp: Ord {
     pub stream: Stream<G, (u32, (u32, i32))>,
-    index: Rc<RefCell<Index<G::Timestamp>>>,
+    index: Rc<RefCell<Index<u32, G::Timestamp>>>,
 }
 
 /// A wrapper for an index and a function turning prefixes into index keys.
@@ -29,7 +29,7 @@ pub struct IndexExtender<G: Scope, P, L: Fn(&P)->u64, F: Fn(&G::Timestamp, &G::T
 }
 
 pub struct Helper<T: Timestamp+Ord, P, L: Fn(&P)->u64, F: Fn(&T, &T)->bool> {
-    index: Rc<RefCell<Index<T>>>,
+    index: Rc<RefCell<Index<u32, T>>>,
     logic: Rc<L>,
     phant: PhantomData<P>,
     func: F,
@@ -40,17 +40,17 @@ impl<T: Timestamp+Ord, P: ::std::fmt::Debug, L: Fn(&P)->u64+'static, F: Fn(&T, &
     /// Counts extensions for a prefix.
     fn count(&self, data: &mut Vec<(P, u64, u64, i32)>, time: &T, ident: u64) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().count(data, &*logic, &|t| (self.func)(t, time), ident);
+        self.index.borrow_mut().count(data, &|p| logic(p) as u32, &|t| (self.func)(t, time), ident);
     }
     /// Proposes extensions for a prefix.
     fn propose(&self, data: &mut Vec<(P, Vec<u32>, i32)>, time: &T) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().propose(data, &*logic, &|t| (self.func)(t, time));
+        self.index.borrow_mut().propose(data, &|p| logic(p) as u32, &|t| (self.func)(t, time));
     }
     /// Intersects proposed extensions for a prefix.
     fn intersect(&self, data: &mut Vec<(P, Vec<u32>, i32)>, time: &T) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().intersect(data, &*logic, &|t| (self.func)(t, time));
+        self.index.borrow_mut().intersect(data, &|p| logic(p) as u32, &|t| (self.func)(t, time));
     }
     /// returns a copy of the prefix-mapping logic.
     fn logic(&self) -> Rc<L> { self.logic.clone() }
@@ -207,33 +207,45 @@ impl<G: Scope> IndexStream<G> where G::Timestamp: Ord {
 /// Arranges something as an `IndexStream`.
 pub trait Indexable<G: Scope> where G::Timestamp : Ord {
     /// Returns an `IndexStream` and a handle through which the index may be mutated.
-    fn index(&self) -> (IndexStream<G>, Rc<RefCell<Index<G::Timestamp>>>); 
+    fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>); 
 }
 
 impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp: ::std::hash::Hash+Ord {
     // returns a container for the streams and indices, as well as handles to the two indices.
-    fn index(&self) -> (IndexStream<G>, Rc<RefCell<Index<G::Timestamp>>>) {
+    fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>) {
 
-    	let index_a1 = Rc::new(RefCell::new(Index::new(self.scope().peers() as usize)));
+    	let index_a1 = Rc::new(RefCell::new(Index::new()));
     	let index_a2 = index_a1.clone();
         let index_a3 = index_a1.clone();
 
         let mut map = HashMap::new();
+        let mut initial = Vec::new();
 
-        let exch = Exchange::new(|&((x,_y),_w)| x as u64);
-    	let stream = self.unary_notify(exch, "Index", vec![], move |input,_output,notificator| {
+        let exch1 = Exchange::new(|&((x,_y),_w)| x as u64);
+        let exch2 = Exchange::new(|&(x,_y)| x as u64);
+    	let stream = self.binary_notify(initially, exch1, exch2, "Index", vec![], move |input1, input2,_output,notificator| {
     		let mut index = index_a2.borrow_mut();
 
-            input.for_each(|time, data| {
+            // extract, enqueue updates.
+            input1.for_each(|time, data| {
                 map.entry(time.time()).or_insert(Vec::new()).extend(data.drain(..).map(|((s,d),w)| (s,(d,w))));
                 notificator.notify_at(time);
             });
 
+            // populate initial collection
+            input2.for_each(|time, data| {
+                initial.extend(data.drain(..));
+                notificator.notify_at(time);
+            });
+
             notificator.for_each(|time,_,_| {
+                // initialize if this is the first time
+                if initial.len() > 0 {
+                    index.initialize(&mut initial);
+                }
+                // push updates if updates exist
                 if let Some(mut list) = map.remove(&time.time()) {
                     index.update(time.time(), &mut list);
-                    // let mut session = output.session(&time);
-                    // for x in list.into_iter() { session.give(x); }
                 }
             });
     	});
