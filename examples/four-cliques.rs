@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 
 use alg3_dynamic::*;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::capture::Extract;
 
@@ -33,7 +32,7 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
+        let (mut input, probe, forward, reverse) = root.dataflow::<u32,_,_>(|builder| {
 
             // Please see triangles for more information on "graph" and dG.
             let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
@@ -130,7 +129,7 @@ fn main () {
                     .inspect_batch(|t,x| println!("{:?}: {:?}", t, x))
                     .capture_into(send);
             }
-            (graph, cliques.probe().0, f_handle, r_handle)
+            (graph, cliques.probe(), f_handle, r_handle)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -151,7 +150,7 @@ fn main () {
         // synchronize with other workers.
         let prev = input.time().clone();
         input.advance_to(prev.inner + 1);
-        root.step_while(|| probe.lt(input.time()));
+        root.step_while(|| probe.less_than(input.time()));
 
         // number of nodes introduced at a time
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
@@ -171,7 +170,7 @@ fn main () {
             if node % batch == (batch - 1) {
                 let prev = input.time().clone();
                 input.advance_to(prev.inner + 1);
-                root.step_while(|| probe.lt(input.time()));
+                root.step_while(|| probe.less_than(input.time()));
 
                 // merge all of the indices we maintain.
                 forward.borrow_mut().merge_to(&prev);

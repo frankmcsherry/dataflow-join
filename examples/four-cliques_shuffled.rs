@@ -34,7 +34,7 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input_graph, mut input_query, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
+        let (mut input_graph, mut input_query, probe, forward, reverse) = root.dataflow::<u32,_,_>(|builder| {
 
             // Please see triangles for more information on `graph_input` and `graph`.
             let (graph_input, graph) = builder.new_input::<(u32, u32)>();
@@ -59,7 +59,7 @@ fn main () {
                     });
             }
 
-            (graph_input, query_input, cliques.probe().0, forward_handle, reverse_handle)
+            (graph_input, query_input, cliques.probe(), forward_handle, reverse_handle)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -105,7 +105,7 @@ fn main () {
                let prev_time = input_graph.time().clone();
                input_graph.advance_to(prev_time.inner + 1);
                input_query.advance_to(prev_time.inner + 1);
-               root.step_while(|| probe.lt(input_query.time()));
+               root.step_while(|| probe.less_than(input_query.time()));
                forward.borrow_mut().merge_to(&prev_time);
                reverse.borrow_mut().merge_to(&prev_time);                
             }
@@ -115,7 +115,7 @@ fn main () {
         let prev_time = input_graph.time().clone();
         input_graph.advance_to(prev_time.inner + 1);
         input_query.advance_to(prev_time.inner + 1);
-        root.step_while(|| probe.lt(input_graph.time()));
+        root.step_while(|| probe.less_than(input_graph.time()));
         println!("{:?}\t[worker {}]\tdata loaded", start.elapsed(), index);
 
         // merge all of the indices the worker maintains.
@@ -127,7 +127,7 @@ fn main () {
         let prev_time = input_graph.time().clone();
         input_graph.advance_to(prev_time.inner + 1);
         input_query.advance_to(prev_time.inner + 1);
-        root.step_while(|| probe.lt(input_graph.time()));
+        root.step_while(|| probe.less_than(input_graph.time()));
         println!("{:?}\t[worker {}]\tindices merged", start.elapsed(), index);
 
         // issue queries and updates, using the remaining lines in the file.
@@ -149,7 +149,7 @@ fn main () {
                 let prev_time = input_graph.time().clone();
                 input_graph.advance_to(prev_time.inner + 1);
                 input_query.advance_to(prev_time.inner + 1);
-                root.step_while(|| probe.lt(input_query.time()));
+                root.step_while(|| probe.less_than(input_query.time()));
                 forward.borrow_mut().merge_to(&prev_time);
                 reverse.borrow_mut().merge_to(&prev_time);
             }

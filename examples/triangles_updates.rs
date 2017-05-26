@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 
 use alg3_dynamic::*;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use graph_map::GraphMMap;
@@ -32,7 +31,7 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut inputG, mut inputQ, probe, forward, reverse) = root.scoped::<u32,_,_>(|builder| {
+        let (mut inputG, mut inputQ, probe, forward, reverse) = root.dataflow::<u32,_,_>(|builder| {
 
             // A dynamic graph is a stream of updates: `((src, dst), wgt)`.
             // Each triple indicates a change to the count of the number of arcs from
@@ -89,7 +88,7 @@ fn main () {
                             }
                         });
             }
-            (graph, query, cliques.probe().0, f_handle, r_handle)
+            (graph, query, cliques.probe(), f_handle, r_handle)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -111,7 +110,7 @@ fn main () {
         let prevG = inputG.time().clone();
         inputG.advance_to(prevG.inner + 1);
         inputQ.advance_to(prevG.inner + 1);
-        root.step_while(|| probe.lt(inputG.time()));
+        root.step_while(|| probe.less_than(inputG.time()));
 
         // number of nodes introduced at a time
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
@@ -131,7 +130,7 @@ fn main () {
         let prevG = inputG.time().clone();
         inputG.advance_to(prevG.inner + 1);
         inputQ.advance_to(prevG.inner + 1);
-        root.step_while(|| probe.lt(inputG.time()));
+        root.step_while(|| probe.less_than(inputG.time()));
 
         if inspect { 
             println!("{:?}\t[worker {}]\tdata loaded", start.elapsed(), index);
@@ -149,7 +148,7 @@ fn main () {
         let prevG = inputG.time().clone();
         inputG.advance_to(prevG.inner + 1);
         inputQ.advance_to(prevG.inner + 1);
-        root.step_while(|| probe.lt(inputG.time()));
+        root.step_while(|| probe.less_than(inputG.time()));
 
         for node in limit .. nodes {
 
@@ -166,7 +165,7 @@ fn main () {
             if node % batch == (batch - 1) {
                 let prev = inputQ.time().clone();
                 inputQ.advance_to(prev.inner + 1);
-                root.step_while(|| probe.lt(inputQ.time()));
+                root.step_while(|| probe.less_than(inputQ.time()));
 
                 // merge all of the indices we maintain.
                 forward.borrow_mut().merge_to(&prev);
