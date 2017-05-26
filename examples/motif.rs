@@ -10,7 +10,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use alg3_dynamic::*;
@@ -45,14 +44,13 @@ fn main () {
         // load fragment of input graph into memory to avoid io while running.
         let filename = std::env::args().nth(2 * (query_size) + 2).unwrap();
         let pre_load = std::env::args().nth(2 * (query_size) + 3).unwrap().parse().unwrap();
-        // let load_batch: usize = std::env::args().nth(2 * (query_size) + 4).unwrap().parse().unwrap();
         let query_batch: usize = std::env::args().nth(2 * (query_size) + 4).unwrap().parse().unwrap();
 
         println!("motif:\t{:?}", motif);
         println!("filename:\t{:?}", filename);
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input_graph, mut input_delta, probe, handles) = root.scoped::<Node,_,_>(move |builder| {
+        let (mut input_graph, mut input_delta, probe, handles) = root.dataflow::<Node,_,_>(move |builder| {
 
             // inputs for initial edges and changes to the edge set, respectively.
             let (graph_input, graph) = builder.new_input::<(Node, Node)>();
@@ -76,7 +74,7 @@ fn main () {
                     });
             }
 
-            (graph_input, delta_input, motifs.probe().0, handles)
+            (graph_input, delta_input, motifs.probe(), handles)
         });
 
         // start the experiment!
@@ -110,7 +108,7 @@ fn main () {
         let prev_time = input_graph.time().clone();
         input_graph.advance_to(prev_time.inner + 1);
         input_delta.advance_to(prev_time.inner + 1);
-        root.step_while(|| probe.lt(input_graph.time()));
+        root.step_while(|| probe.less_than(input_graph.time()));
         println!("{:?}\t[worker {}]\tdata loaded", start.elapsed(), index);
 
         // loop { }
@@ -123,7 +121,7 @@ fn main () {
         let prev_time = input_graph.time().clone();
         input_graph.advance_to(prev_time.inner + 1);
         input_delta.advance_to(prev_time.inner + 1);
-        root.step_while(|| probe.lt(input_graph.time()));
+        root.step_while(|| probe.less_than(input_graph.time()));
         println!("{:?}\t[worker {}]\tindices merged", start.elapsed(), index);
 
         // issue queries and updates, using the remaining lines in the file.
@@ -145,7 +143,7 @@ fn main () {
                 let prev_time = input_graph.time().clone();
                 input_graph.advance_to(prev_time.inner + 1);
                 input_delta.advance_to(prev_time.inner + 1);
-                root.step_while(|| probe.lt(input_delta.time()));
+                root.step_while(|| probe.less_than(input_delta.time()));
                 handles.merge_to(&prev_time);
             }
         }

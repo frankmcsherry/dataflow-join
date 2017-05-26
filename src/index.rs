@@ -490,13 +490,6 @@ impl<Key: Ord+Hash+Copy, T: Ord+Clone> Index<Key, T> {
     #[inline(never)]
     pub fn initialize(&mut self, initial: &mut Vec<Vec<(Key, u32)>>) {
 
-        if self.compact.0.len() > 0 || self.edges.len() > 0 || self.diffs.len() > 0 {
-            panic!("re-initializing active index");
-        }
-
-        // perhaps we should use a radix sort here, to avoid extra memory allocation?
-        // initial.sort();
-
         let length = initial.iter().map(|x| x.len()).sum();
         self.compact.1 = Vec::with_capacity(length);
 
@@ -512,19 +505,5 @@ impl<Key: Ord+Hash+Copy, T: Ord+Clone> Index<Key, T> {
                 }
             }
         }
-
-        // self.compact.1 = Vec::with_capacity(initial.len());
-        // self.compact.1.push(initial[0].1);
-        // for index in 1 .. initial.len() {
-        //     if initial[index].0 != initial[index-1].0 {
-        //         self.compact.0.push((initial[index-1].0, index));
-        //     }
-        //     self.compact.1.push(initial[index].1)
-        // }
-        // self.compact.0.push((initial[initial.len()-1].0, initial.len()));
-
-        *initial = Vec::new();
-
-        // println!("index initialized: ({}, {})", self.compact.0.len(), self.compact.1.len());
     }
 }

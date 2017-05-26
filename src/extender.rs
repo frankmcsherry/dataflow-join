@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::fmt::Debug;
 
-use timely::Data;
+use timely::ExchangeData;
 use timely::dataflow::{Stream, Scope};
 use timely::dataflow::operators::Binary;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::progress::Timestamp;
 
 use timely_sort::LSBRadixSorter;
+use timely_sort::RadixSorterBase;
+use timely_sort::RadixSorter;
 
 use {Index, StreamPrefixExtender};
 
@@ -63,7 +65,7 @@ impl<T: Timestamp+Ord, P: ::std::fmt::Debug, L: Fn(&P)->u64+'static, F: Fn(&T, &
 impl<G, P, L, F> StreamPrefixExtender<G> for Rc<IndexExtender<G, P, L, F>> 
 where G: Scope, 
       G::Timestamp: ::std::hash::Hash+Ord,
-      P: Data+Debug, 
+      P: ExchangeData+Debug, 
       L: Fn(&P)->u64+'static, 
       F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static {
     type Prefix = P;
@@ -212,11 +214,11 @@ pub trait Indexable<G: Scope> where G::Timestamp : Ord {
     fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>); 
 }
 
-impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp: ::std::hash::Hash+Ord {
+impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp: ::std::hash::Hash+Ord+Clone {
     // returns a container for the streams and indices, as well as handles to the two indices.
     fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>) {
 
-    	let index_a1 = Rc::new(RefCell::new(Index::new()));
+    	let index_a1: Rc<RefCell<Index<u32, G::Timestamp>>> = Rc::new(RefCell::new(Index::new()));
     	let index_a2 = index_a1.clone();
         let index_a3 = index_a1.clone();
 
@@ -232,7 +234,7 @@ impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp:
 
             // extract, enqueue updates.
             input1.for_each(|time, data| {
-                map.entry(time.time()).or_insert(Vec::new()).extend(data.drain(..).map(|((s,d),w)| (s,(d,w))));
+                map.entry(time.time().clone()).or_insert(Vec::new()).extend(data.drain(..).map(|((s,d),w)| (s,(d,w))));
                 notificator.notify_at(time);
             });
 
@@ -254,8 +256,8 @@ impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp:
                     println!("{:?}\tinitialization complete", timer.elapsed());
                 }
                 // push updates if updates exist
-                if let Some(mut list) = map.remove(&time.time()) {
-                    index.update(time.time(), &mut list);
+                if let Some(mut list) = map.remove(time.time()) {
+                    index.update(time.time().clone(), &mut list);
                 }
             });
     	});

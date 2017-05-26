@@ -11,7 +11,7 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use timely::Data;
+use timely::{Data, ExchangeData};
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -130,7 +130,7 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
     /// Extends an indexable prefix, using a plan described by several (attr, is_forward, is_prior) cues.
     fn extend_attribute<'a, P>(&self, stream: &Stream<G, (P, i32)>, plan: &[(usize, bool, bool)]) -> Stream<G, (P, Vec<u32>, i32)> 
         where G: 'a,
-              P: ::std::fmt::Debug+Data+Indexable64 {
+              P: ::std::fmt::Debug+ExchangeData+Indexable64 {
         let mut extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=u32>+'a>> = vec![];
         for &(attribute, is_forward, prior) in plan {
             extenders.push(match (is_forward, prior) {
