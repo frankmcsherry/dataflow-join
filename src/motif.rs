@@ -37,8 +37,8 @@ impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
 pub struct GraphStreamIndex<G: Scope> 
     where G::Timestamp: Ord+::std::hash::Hash {
     updates: Stream<G, ((u32, u32), i32)>,
-    forward: IndexStream<G>,
-    reverse: IndexStream<G>,
+    pub forward: IndexStream<G>,
+    pub reverse: IndexStream<G>,
 }
 
 impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
@@ -49,6 +49,24 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
         let (forward, f_handle) = updates.index_from(&initially);
         let (reverse, r_handle) = updates.map(|((src,dst),wgt)| ((dst,src),wgt))
                                          .index_from(&initially.map(|(src,dst)| (dst,src)));
+        let index = GraphStreamIndex {
+            updates: updates,
+            forward: forward,
+            reverse: reverse,
+        };
+        let handles = GraphStreamIndexHandle {
+            forward: f_handle,
+            reverse: r_handle,
+        };
+        (index, handles)
+    }
+
+    /// Constructs a new graph stream index from initial edges and an update stream.
+    pub fn from_separately(initially_f: Stream<G, (u32, u32)>, initially_r: Stream<G, (u32, u32)>, 
+                updates: Stream<G, ((u32, u32), i32)>) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
+        let (forward, f_handle) = updates.index_from(&initially_f);
+        let (reverse, r_handle) = updates.map(|((src,dst),wgt)| ((dst,src),wgt))
+                                         .index_from(&initially_r.map(|(src,dst)| (dst,src)));
         let index = GraphStreamIndex {
             updates: updates,
             forward: forward,
