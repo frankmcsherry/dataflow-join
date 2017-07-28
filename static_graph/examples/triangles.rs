@@ -53,10 +53,12 @@ fn main () {
 
             let mut count = 0;
             if inspect {
-                cliques.inspect_batch(move |_t, b| {
-                    for x in b { count += x.1.len(); }
-                    println!("count: {}", count);
-                });
+                cliques
+                    .exchange(|x| 0)
+                    .inspect_batch(move |_t, b| {
+                        for x in b { count += x.1.len(); }
+                        println!("count: {}", count);
+                    });
             }
 
             (input, cliques.probe())
