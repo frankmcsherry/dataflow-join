@@ -180,8 +180,8 @@ fn main () {
 #[allow(non_snake_case)]
 fn cliques_4<G: Scope>(
     queries: &Stream<G, ((u32, u32), i32)>, 
-    forward: &IndexStream<G>,
-    reverse: &IndexStream<G>) -> Stream<G, ((u32, u32, u32, u32), i32)> 
+    forward: &IndexStream<G, u32, u32>,
+    reverse: &IndexStream<G, u32, u32>) -> Stream<G, ((u32, u32, u32, u32), i32)> 
 
     where G::Timestamp : Ord+::std::hash::Hash {
 
@@ -197,57 +197,57 @@ fn cliques_4<G: Scope>(
 
     let dQ = queries.clone();
 
-    let dK4dA1 = dQ.extend(vec![Box::new(forward.extend_using(|&( a1,_a2)| a1 as u64, |t1, t2| t1.lt(t2))),
-                                Box::new(forward.extend_using(|&(_a1, a2)| a2 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dA1 = dQ.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                Box::new(forward.extend_using(|&(_a1,ref a2)| a2, |&k| k as u64, |t1, t2| t1.lt(t2)))])
                   .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,e), wght)));
-    let dK4dA =  dK4dA1.extend(vec![Box::new(forward.extend_using(|&( a1,_a2,_a3)| a1 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(forward.extend_using(|&(_a1, a2,_a3)| a2 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(forward.extend_using(|&(_a1,_a2, a3)| a3 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dA =  dK4dA1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
                   .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
 
     // dQdB(a1,a3): Similar to above first extend (a1, a3) to (a1, a2, a3). Then to (a1, a2, a3, a4).
-    let dK4dB1 = dQ.extend(vec![Box::new(forward.extend_using(|&( a1,_a3)| a1 as u64, |t1, t2| t1.le(t2))),
-                                Box::new(reverse.extend_using(|&(_a1, a3)| a3 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dB1 = dQ.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                Box::new(reverse.extend_using(|&(_a1,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1), wght)));
-    let dK4dB =  dK4dB1.extend(vec![Box::new(forward.extend_using(|&( a1,_a2,_a3)| a1 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(forward.extend_using(|&(_a1, a2,_a3)| a2 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(forward.extend_using(|&(_a1,_a2, a3)| a3 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dB =  dK4dB1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
     
     // dQdC(a1,a4): Similar to above first extend (a1, a4) to (a1, a2, a4). Then to (a1, a2, a3, a4).
-    let dK4dC1 = dQ.extend(vec![Box::new(forward.extend_using(|&( a1,_a4)| a1 as u64, |t1, t2| t1.le(t2))),
-                                Box::new(reverse.extend_using(|&(_a1, a4)| a4 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dC1 = dQ.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                Box::new(reverse.extend_using(|&(_a1,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1), wght)));
-    let dK4dC =  dK4dC1.extend(vec![Box::new(forward.extend_using(|&( a1,_a2,_a4)| a1 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(forward.extend_using(|&(_a1, a2,_a4)| a2 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(reverse.extend_using(|&(_a1,_a2, a4)| a4 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dC =  dK4dC1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,e, p.2), wght)));
     
     // dQdD(a2,a3): Similar to above first extend (a2, a3) to (a1, a2, a3). Then to (a1, a2, a3, a4).
-    let dK4dD1 = dQ.extend(vec![Box::new(reverse.extend_using(|&( a2,_a3)| a2 as u64, |t1, t2| t1.le(t2))),
-                                Box::new(reverse.extend_using(|&(_a2, a3)| a3 as u64, |t1, t2| t1.le(t2)))])
+    let dK4dD1 = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                Box::new(reverse.extend_using(|&(_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.le(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-    let dK4dD =  dK4dD1.extend(vec![Box::new(forward.extend_using(|&( a1,_a2,_a3)| a1 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(forward.extend_using(|&(_a1, a2,_a3)| a2 as u64, |t1, t2| t1.lt(t2))),
-                                    Box::new(forward.extend_using(|&(_a1,_a2, a3)| a3 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dD =  dK4dD1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
     
     // dQdE(a2,a4): Similar to above first extend (a2, a4) to (a1, a2, a4). Then to (a1, a2, a3, a4).
-    let dK4dE1 = dQ.extend(vec![Box::new(reverse.extend_using(|&( a2,_a4)| a2 as u64, |t1, t2| t1.le(t2))),
-                                Box::new(reverse.extend_using(|&(_a2, a4)| a4 as u64, |t1, t2| t1.le(t2)))])
+    let dK4dE1 = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                Box::new(reverse.extend_using(|&(_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-    let dK4dE =  dK4dE1.extend(vec![Box::new(forward.extend_using(|&( a1,_a2,_a4)| a1 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(forward.extend_using(|&(_a1, a2,_a4)| a2 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(reverse.extend_using(|&(_a1,_a2, a4)| a4 as u64, |t1, t2| t1.lt(t2)))])
+    let dK4dE =  dK4dE1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1, e, p.2), wght)));
     
     // dQdF(a3,a4): Similar to above first extend (a3, a4) to (a1, a3, a4). Then to (a1, a2, a3, a4).
-    let dK4dF1 = dQ.extend(vec![Box::new(reverse.extend_using(|&( a3,_a4)| a3 as u64, |t1, t2| t1.le(t2))),
-                                Box::new(reverse.extend_using(|&(_a3, a4)| a4 as u64, |t1, t2| t1.le(t2)))])
+    let dK4dF1 = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref a3,_a4)| a3, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                Box::new(reverse.extend_using(|&(_a3,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-    let dK4dF =  dK4dF1.extend(vec![Box::new(forward.extend_using(|&( a1,_a3,_a4)| a1 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(reverse.extend_using(|&(_a1, a3,_a4)| a3 as u64, |t1, t2| t1.le(t2))),
-                                    Box::new(reverse.extend_using(|&(_a1,_a3, a4)| a4 as u64, |t1, t2| t1.le(t2)))])
+    let dK4dF =  dK4dF1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(reverse.extend_using(|&(_a1,ref a3,_a4)| a3, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                    Box::new(reverse.extend_using(|&(_a1,_a3,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
         .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1, p.2), wght)));
     
 

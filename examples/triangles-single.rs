@@ -12,7 +12,9 @@ use graph_map::GraphMMap;
 
 fn main () {
     if let Some(source) = std::env::args().skip(1).next() {
-        println!("triangles: {:?}", raw_triangles(&GraphMMap::new(&source)));
+        let timer = ::std::time::Instant::now();
+        let count = raw_triangles(&GraphMMap::new(&source));
+        println!("{:?}\ttriangles: {:?}", timer.elapsed(), count);
     }
     else {
         println!("usage: <source>");
@@ -53,16 +55,24 @@ fn intersect(mut aaa: &[u32], mut bbb: &[u32]) -> u64 {
         }
     }
     else {
-        while aaa.len() > 0 && bbb.len() > 0 {
-            match aaa[0].cmp(&bbb[0]) {
-                Greater => { bbb = &bbb[1..]; },
-                Less    => { aaa = &aaa[1..]; },
-                Equal   => { aaa = &aaa[1..];
-                             bbb = &bbb[1..];
-                             count += 1;
-                           },
+        for &a in aaa {
+            while bbb.len() > 0 && bbb[0] < a {
+                bbb = &bbb[1..];
+            }
+            if bbb.len() > 0 && a == bbb[0] {
+                count += 1;
             }
         }
+        // while aaa.len() > 0 && bbb.len() > 0 {
+        //     match aaa[0].cmp(&bbb[0]) {
+        //         Greater => { bbb = &bbb[1..]; },
+        //         Less    => { aaa = &aaa[1..]; },
+        //         Equal   => { aaa = &aaa[1..];
+        //                      bbb = &bbb[1..];
+        //                      count += 1;
+        //                    },
+        //     }
+        // }
     }
     count
 }

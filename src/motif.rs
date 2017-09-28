@@ -11,7 +11,7 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use timely::{Data, ExchangeData};
+use timely::ExchangeData;
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
@@ -21,8 +21,8 @@ use ::{IndexStream, StreamPrefixExtender, GenericJoin};
 
 /// Handles to the forward and reverse graph indices.
 pub struct GraphStreamIndexHandle<T> {
-    forward: Rc<RefCell<Index<u32, T>>>,
-    reverse: Rc<RefCell<Index<u32, T>>>,
+    forward: Rc<RefCell<Index<u32, u32, T>>>,
+    reverse: Rc<RefCell<Index<u32, u32, T>>>,
 }
 
 impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
@@ -37,8 +37,8 @@ impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
 pub struct GraphStreamIndex<G: Scope> 
     where G::Timestamp: Ord+::std::hash::Hash {
     updates: Stream<G, ((u32, u32), i32)>,
-    pub forward: IndexStream<G>,
-    pub reverse: IndexStream<G>,
+    pub forward: IndexStream<G, u32, u32>,
+    pub reverse: IndexStream<G, u32, u32>,
 }
 
 impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
@@ -90,17 +90,17 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
 }
 
 
-trait Indexable64 {
-    fn index(&self, index: usize) -> u64;
+trait IndexU32 {
+    fn index(&self, index: usize) -> &u32;
 }
 
-impl Indexable64 for Vec<u32> {
-    fn index(&self, index: usize) -> u64 { self[index] as u64 }
+impl IndexU32 for Vec<u32> {
+    fn index(&self, index: usize) -> &u32 { &self[index] }
 }
-impl Indexable64 for [u32; 2] { fn index(&self, index: usize) -> u64 { self[index] as u64 } }
-impl Indexable64 for [u32; 3] { fn index(&self, index: usize) -> u64 { self[index] as u64 } }
-impl Indexable64 for [u32; 4] { fn index(&self, index: usize) -> u64 { self[index] as u64 } }
-impl Indexable64 for [u32; 5] { fn index(&self, index: usize) -> u64 { self[index] as u64 } }
+impl IndexU32 for [u32; 2] { fn index(&self, index: usize) -> &u32 { &self[index] } }
+impl IndexU32 for [u32; 3] { fn index(&self, index: usize) -> &u32 { &self[index] } }
+impl IndexU32 for [u32; 4] { fn index(&self, index: usize) -> &u32 { &self[index] } }
+impl IndexU32 for [u32; 5] { fn index(&self, index: usize) -> &u32 { &self[index] } }
 
 impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
 
@@ -148,14 +148,14 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
     /// Extends an indexable prefix, using a plan described by several (attr, is_forward, is_prior) cues.
     fn extend_attribute<'a, P>(&self, stream: &Stream<G, (P, i32)>, plan: &[(usize, bool, bool)]) -> Stream<G, (P, Vec<u32>, i32)> 
         where G: 'a,
-              P: ::std::fmt::Debug+ExchangeData+Indexable64 {
+              P: ::std::fmt::Debug+ExchangeData+IndexU32 {
         let mut extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=u32>+'a>> = vec![];
         for &(attribute, is_forward, prior) in plan {
             extenders.push(match (is_forward, prior) {
-                (true, true)    => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |t1, t2| t1.le(t2))),
-                (true, false)   => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |t1, t2| t1.lt(t2))),
-                (false, true)   => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |t1, t2| t1.le(t2))),
-                (false, false)  => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |t1, t2| t1.lt(t2))),
+                (true, true)    => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.le(t2))),
+                (true, false)   => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.lt(t2))),
+                (false, true)   => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.le(t2))),
+                (false, false)  => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.lt(t2))),
             })
         }
         stream.extend(extenders)

@@ -52,8 +52,8 @@ fn main () {
             let (reverse, r_handle) = dG.filter(|_|false).map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.map(|((x,y),_)| (y,x)));
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y as u64, |t1, t2| t1.le(t2))),
-                                       Box::new(reverse.extend_using(|&(_,z)| z as u64, |t1, t2| t1.le(t2)))]);
+            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, |&k| k as u64, |t1, t2| t1.le(t2))),
+                                       Box::new(reverse.extend_using(|&(_,ref z)| z, |&k| k as u64, |t1, t2| t1.le(t2)))]);
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {

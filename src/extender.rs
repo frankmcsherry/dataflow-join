@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 use timely::ExchangeData;
 use timely::dataflow::{Stream, Scope};
@@ -21,62 +22,89 @@ use {Index, StreamPrefixExtender};
 /// The stream itself is empty, but its frontier can be used as a guarantee that the 
 /// index contents are locked down for certain times. The index is only available through
 /// the `get_index()` method, to ensure that you don't write to it here.
-pub struct IndexStream<G: Scope> where G::Timestamp: Ord {
-    pub stream: Stream<G, (u32, (u32, i32))>,
-    index: Rc<RefCell<Index<u32, G::Timestamp>>>,
+pub struct IndexStream<G: Scope, K: Ord+Hash+Clone, V: Ord+Clone> where G::Timestamp: Ord {
+    pub stream: Stream<G, (K, (V, i32))>,
+    index: Rc<RefCell<Index<K, V, G::Timestamp>>>,
 }
 
 /// A wrapper for an index and a function turning prefixes into index keys.
-pub struct IndexExtender<G: Scope, P, L: Fn(&P)->u64, F: Fn(&G::Timestamp, &G::Timestamp)->bool> where G::Timestamp: Ord {
-    stream: Stream<G, (u32,(u32,i32))>,
-    helper: Rc<Helper<G::Timestamp, P, L, F>>,
+pub struct IndexExtender<K, V, G, P, L, H, F>
+where 
+    K: Ord+Hash+Clone, 
+    V: Ord+Clone, 
+    G: Scope, 
+    G::Timestamp: Ord,
+    L: Fn(&P)->&K,
+    H: Fn(&K)->u64,
+    F: Fn(&G::Timestamp, &G::Timestamp)->bool 
+{
+    stream: Stream<G, (K,(V,i32))>,
+    helper: Rc<Helper<K, V, G::Timestamp, P, L, H, F>>,
 }
 
-pub struct Helper<T: Timestamp+Ord, P, L: Fn(&P)->u64, F: Fn(&T, &T)->bool> {
-    index: Rc<RefCell<Index<u32, T>>>,
+pub struct Helper<K: Ord+Hash+Clone, V: Ord+Clone, T: Timestamp+Ord, P, L: Fn(&P)->&K, H: Fn(&K)->u64, F: Fn(&T, &T)->bool> {
+    index: Rc<RefCell<Index<K, V, T>>>,
     logic: Rc<L>,
+    hash: Rc<H>,
     phant: PhantomData<P>,
     func: F,
 }
 
 // Implementations wrapping the underlying `Index` struct.
-impl<T: Timestamp+Ord, P: ::std::fmt::Debug, L: Fn(&P)->u64+'static, F: Fn(&T, &T)->bool> Helper<T, P, L, F> {
+impl<K, V, T, P, L, H, F> Helper<K, V, T, P, L, H, F> 
+where
+    K: Ord+Hash+Clone, 
+    V: Ord+Clone, 
+    T: Timestamp+Ord, 
+    P: ::std::fmt::Debug, 
+    L: Fn(&P)->&K+'static, 
+    H: Fn(&K)->u64+'static,
+    F: Fn(&T, &T)->bool
+{
     /// Counts extensions for a prefix.
     fn count(&self, data: &mut Vec<(P, u64, u64, i32)>, time: &T, ident: u64) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().count(data, &|p| logic(p) as u32, &|t| (self.func)(t, time), ident);
+        self.index.borrow_mut().count(data, &|p| logic(p), &|t| (self.func)(t, time), ident);
     }
     /// Proposes extensions for a prefix.
-    fn propose(&self, data: &mut Vec<(P, Vec<u32>, i32)>, time: &T) {
+    fn propose(&self, data: &mut Vec<(P, Vec<V>, i32)>, time: &T) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().propose(data, &|p| logic(p) as u32, &|t| (self.func)(t, time));
+        self.index.borrow_mut().propose(data, &|p| logic(p), &|t| (self.func)(t, time));
     }
     /// Intersects proposed extensions for a prefix.
-    fn intersect(&self, data: &mut Vec<(P, Vec<u32>, i32)>, time: &T) {
+    fn intersect(&self, data: &mut Vec<(P, Vec<V>, i32)>, time: &T) {
         let logic = self.logic.clone();
-        self.index.borrow_mut().intersect(data, &|p| logic(p) as u32, &|t| (self.func)(t, time));
+        self.index.borrow_mut().intersect(data, &|p| logic(p), &|t| (self.func)(t, time));
     }
     /// returns a copy of the prefix-mapping logic.
     fn logic(&self) -> Rc<L> { self.logic.clone() }
+    /// returns a copy of the prefix-mapping logic.
+    fn hash(&self) -> Rc<H> { self.hash.clone() }
 }
 
 
 
-impl<G, P, L, F> StreamPrefixExtender<G> for Rc<IndexExtender<G, P, L, F>> 
-where G: Scope, 
-      G::Timestamp: ::std::hash::Hash+Ord,
-      P: ExchangeData+Debug, 
-      L: Fn(&P)->u64+'static, 
-      F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static {
+impl<K, V, G, P, L, H, F> StreamPrefixExtender<G> for Rc<IndexExtender<K, V, G, P, L, H, F>> 
+where 
+    K: Ord+Hash+Clone+ExchangeData,
+    V: Ord+Clone+ExchangeData,
+    G: Scope,
+    G::Timestamp: ::std::hash::Hash+Ord,
+    P: ExchangeData+Debug,
+    L: Fn(&P)->&K+'static,
+    H: Fn(&K)->u64+'static,
+    F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static 
+{
     type Prefix = P;
-    type Extension = u32;
+    type Extension = V;
 
     fn count(&self, prefixes: Stream<G, (Self::Prefix, u64, u64, i32)>, ident: u64) 
     -> Stream<G, (Self::Prefix, u64, u64, i32)> {
         
+        let hash = self.helper.hash();
         let clone = self.helper.clone();
         let logic = self.helper.logic();
-        let exch = Exchange::new(move |&(ref x,_,_,_)| (*logic)(x));
+        let exch = Exchange::new(move |&(ref x,_,_,_)| (*hash)((*logic)(x)));
 
         let mut blocked = vec![];
 
@@ -117,9 +145,11 @@ where G: Scope,
     fn propose(&self, stream: Stream<G, (Self::Prefix, i32)>) 
     -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)> {
 
-        let clone = self.helper.clone();
+        let hash = self.helper.hash();
         let logic = self.helper.logic();
-        let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
+        let exch = Exchange::new(move |&(ref x,_)| (*hash)((*logic)(x)));
+
+        let clone = self.helper.clone();
 
         let mut blocked = vec![];
 
@@ -156,11 +186,12 @@ where G: Scope,
     fn intersect(&self, stream: Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)>) 
         -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)> {
 
+        let hash = self.helper.hash();
         let logic = self.helper.logic();
         let clone = self.helper.clone();
 
         let mut blocked = Vec::new();
-        let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
+        let exch = Exchange::new(move |&(ref x,_,_)| (*hash)((*logic)(x)));
 
         stream.binary_notify(&self.stream, exch, Pipeline, "Intersect", vec![], 
             move |input1, input2, output, notificator| {
@@ -183,24 +214,27 @@ where G: Scope,
     }
 }
 
-impl<G: Scope> IndexStream<G> where G::Timestamp: Ord {
+impl<G: Scope, K: Ord+Hash+Clone, V: Ord+Clone> IndexStream<G, K, V> where G::Timestamp: Ord {
     /// Extends an `IndexStream` using the supplied functions.
     ///
     /// The `logic` function maps prefixes to index keys.
     /// The `func` function compares timestamps, acting as either `lt` or `le` depending 
     /// on the need.
-	pub fn extend_using<P, L, F>(&self, logic: L, func: F) -> Rc<IndexExtender<G, P, L, F>> 
+	pub fn extend_using<P, L, H, F>(&self, logic: L, hash: H, func: F) -> Rc<IndexExtender<K, V, G, P, L, H, F>> 
     where 
-        L: Fn(&P)->u64+'static, 
+        L: Fn(&P)->&K+'static, 
+        H: Fn(&K)->u64+'static,
         F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static
     {
         let logic = Rc::new(logic);
+        let hash = Rc::new(hash);
 
 		Rc::new(IndexExtender {
             stream: self.stream.clone(),
             helper: Rc::new(Helper {
                 index: self.index.clone(),
                 logic: logic.clone(),
+                hash: hash.clone(),
                 phant: PhantomData,
                 func: func,
             }),
@@ -209,16 +243,16 @@ impl<G: Scope> IndexStream<G> where G::Timestamp: Ord {
 } 
 
 /// Arranges something as an `IndexStream`.
-pub trait Indexable<G: Scope> where G::Timestamp : Ord {
+pub trait Indexable<G: Scope, K: Ord+Hash+Clone, V: Ord+Clone> where G::Timestamp : Ord {
     /// Returns an `IndexStream` and a handle through which the index may be mutated.
-    fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>); 
+    fn index_from(&self, initially: &Stream<G, (K, V)>) -> (IndexStream<G, K, V>, Rc<RefCell<Index<K, V, G::Timestamp>>>); 
 }
 
-impl<G: Scope> Indexable<G> for Stream<G, ((u32, u32), i32)> where G::Timestamp: ::std::hash::Hash+Ord+Clone {
+impl<G: Scope> Indexable<G, u32, u32> for Stream<G, ((u32, u32), i32)> where G::Timestamp: ::std::hash::Hash+Ord+Clone {
     // returns a container for the streams and indices, as well as handles to the two indices.
-    fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G>, Rc<RefCell<Index<u32, G::Timestamp>>>) {
+    fn index_from(&self, initially: &Stream<G, (u32, u32)>) -> (IndexStream<G, u32, u32>, Rc<RefCell<Index<u32, u32, G::Timestamp>>>) {
 
-    	let index_a1: Rc<RefCell<Index<u32, G::Timestamp>>> = Rc::new(RefCell::new(Index::new()));
+    	let index_a1: Rc<RefCell<Index<u32, u32, G::Timestamp>>> = Rc::new(RefCell::new(Index::new()));
     	let index_a2 = index_a1.clone();
         let index_a3 = index_a1.clone();
 
