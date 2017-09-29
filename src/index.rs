@@ -65,16 +65,25 @@ mod compact {
         /// Reveal the slice for `key` starting from (and updating) `key_cursor`.
         pub fn values_from<'a>(&'a self, key: &K, key_cursor: &mut usize) -> &'a [V] {
 
-            *key_cursor += advance(&self.keys[*key_cursor..], |x| &x.0 < key);
+            if *key_cursor < self.keys.len() {
 
-            if self.keys.get(*key_cursor).map(|x| &x.0) == Some(key) {
-                let lower = if *key_cursor == 0 { 0 } else { self.keys[*key_cursor-1].1 };
-                let upper = self.keys[*key_cursor].1;
-                *key_cursor += 1;
-                &self.vals[lower .. upper]                
+                *key_cursor += advance(&self.keys[*key_cursor..], |x| &x.0 < key);
+
+                if self.keys.get(*key_cursor).map(|x| &x.0) == Some(key) {
+                    let lower = if *key_cursor == 0 { 0 } else { self.keys[*key_cursor-1].1 };
+                    let upper = self.keys[*key_cursor].1;
+
+                    assert!(lower < upper);
+
+                    *key_cursor += 1;
+                    &self.vals[lower .. upper]                
+                }
+                else {
+                    *key_cursor += 1;
+                    &[]
+                }
             }
             else {
-                *key_cursor += 1;
                 &[]
             }
         }
@@ -498,8 +507,8 @@ mod unsorted {
             result
         }
 
-        pub fn extend<I: Iterator<Item=(K, (V, i32))>>(&mut self, time: T, iterator: I) {
-            self.updates.extend(iterator.map(|(k,(v,d))| (k, v, time.clone(), d)));
+        pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, time: T, iterator: I) {
+            self.updates.extend(iterator.map(|((k,v),d)| (k, v, time.clone(), d)));
             self.updates.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
         }
     }
@@ -774,7 +783,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     /// These updates will now be reflected in all queries against the index, at or after the 
     /// indicated logical time.
     #[inline(never)]
-    pub fn update(&mut self, time: T, updates: &mut Vec<(Key, (Val, i32))>) {
+    pub fn update(&mut self, time: T, updates: &mut Vec<((Key, Val), i32)>) {
         self.diffs.extend(time, updates.drain(..));
     }
 

@@ -23,64 +23,8 @@
 //! indicate a relational query like above, and the crate with synthesize a timely dataflow computation which
 //! reports all changes to the occurrences of satisfying assignments to the values. The amount of work performed
 //! is no more than the worst-case optimal bound.
-//!
-//! #Example
-//!
-//! ```ignore
-//! fn main () {
-//!    
-//!     // start up a timely dataflow computation
-//!     timely::execute_from_args(std::env::args(), move |root| {
-//!
-//!         // build the dataflow graph, return input and output.
-//!         let (edges, probe) = root.scoped(|scope| {
-//!
-//!             // construct an input for edge changes.
-//!             let (input, edges) = scope.new_input();
-//!
-//!             // index the edge relation by first and second fields.
-//!             let (forward, forward_handle) = edges.concat(&query).index();
-//!             let (reverse, reverse_handle) = edges.concat(&query)
-//!                                                  .map(|((src,dst),wgt)| ((dst,src),wgt))
-//!                                                  .index();
-//!
-//!             // construct the motif dataflow subgraph.
-//!             let motif = vec![(0,1), (1,2), (2,0)];
-//!             let cycles = general_motif(motif, &edges, &forward, &reverse);
-//! 
-//!             // count cycles, print, return status of the result.
-//!             let probe = cycles.count()
-//!                               .inspect(|x| println("found: {:?}", x))
-//!                               .probe().0;
-//!
-//!             (input, probe)
-//!         });         
-//!
-//!         // now supply a stream of changes to the graph.         
-//!         edges.send(((0, 1), 1));
-//!         edges.send(((1, 2), 1));
-//!         edges.send(((2, 0), 1));
-//!         edges.advance_to(1);
-//!         root.step_while(|| probe.lt(&edges.time()));
-//!         // should report `(0, 1, 2)`.
-//!
-//!         edges.send(((0, 0), 1));
-//!         edges.advance_to(2);
-//!         root.step_while(|| probe.lt(&edges.time()));
-//!         // should report `(0, 0, 0)`
-//!
-//!         edges.send(((0, 1), -1));
-//!         edges.advance_to(2);
-//!         root.step_while(|| probe.lt(&edges.time()));
-//!         // should report `(0, 1, 2)` with a negative update.
-//!     }
-//! }
-//! ```
 
 extern crate timely;
-extern crate time;
-extern crate fnv;
-extern crate timely_sort;
 
 use timely::dataflow::*;
 use timely::dataflow::operators::*;
@@ -91,7 +35,7 @@ mod extender;
 pub mod motif;
 
 pub use index::Index;
-pub use extender::{IndexStream, Indexable};
+pub use extender::IndexStream;
 
 /// Functionality used by GenericJoin to extend prefixes with new attributes.
 ///

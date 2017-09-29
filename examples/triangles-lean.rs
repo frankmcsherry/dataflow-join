@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate graph_map;
 extern crate alg3_dynamic;
@@ -15,7 +13,7 @@ use graph_map::GraphMMap;
 #[allow(non_snake_case)]
 fn main () {
 
-    let start = time::precise_time_s();
+    let start = ::std::time::Instant::now();
 
     let send = Arc::new(Mutex::new(0));
     let send2 = send.clone();
@@ -49,11 +47,19 @@ fn main () {
 
             // we will index the data both by src and dst.
             // let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
-            let (reverse, r_handle) = dG.filter(|_|false).map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.map(|((x,y),_)| (y,x)));
+            let reverse = IndexStream::from(|&k| k as u64, 
+                                            &dG.map(|((x,y),_)| (y,x)),
+                                            &Vec::new().to_stream(builder));
+
+            // let r_handle = reverse.index.clone()
+
+            // let (reverse, r_handle) = dG.filter(|_|false)
+            //                             .map(|((src,dst),wgt)| ((dst,src),wgt))
+            //                             .index_from(&dG.map(|((x,y),_)| (y,x)), |&k| k as u64);
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                       Box::new(reverse.extend_using(|&(_,ref z)| z, |&k| k as u64, |t1, t2| t1.le(t2)))]);
+            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, |t1, t2| t1.le(t2))),
+                                         Box::new(reverse.extend_using(|&(_,ref z)| z, |t1, t2| t1.le(t2)))]);
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {
@@ -67,7 +73,7 @@ fn main () {
                         });
             }
 
-            (graph, query, cliques.probe(), /*f_handle,*/ r_handle)
+            (graph, query, cliques.probe(), reverse)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -95,7 +101,7 @@ fn main () {
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
         // start the experiment!
-        let start = time::precise_time_s();
+        let start = ::std::time::Instant::now();
 
         for node in 0 .. nodes {
 
@@ -111,10 +117,10 @@ fn main () {
         input.advance_to(prev.inner + 1);
         query.advance_to(prev.inner + 1);
         root.step_while(|| probe.less_than(query.time()));
-        reverse.borrow_mut().merge_to(&prev);
+        reverse.index.borrow_mut().merge_to(&prev);
         input.close();
 
-        println!("{:?}: index built", time::precise_time_s() - start);
+        println!("{:?}: index built", start.elapsed());
 
         for node in 0 .. nodes {
 
@@ -133,7 +139,7 @@ fn main () {
 
                 // merge all of the indices we maintain.
                 // forward.borrow_mut().merge_to(&prev);
-                reverse.borrow_mut().merge_to(&prev);
+                reverse.index.borrow_mut().merge_to(&prev);
             }
         }
 
@@ -141,7 +147,7 @@ fn main () {
         while root.step() { }
 
         if inspect { 
-            println!("worker {} elapsed: {:?}", index, time::precise_time_s() - start); 
+            println!("worker {} elapsed: {:?}", index, start.elapsed()); 
         }
 
     }).unwrap();
@@ -152,6 +158,6 @@ fn main () {
     else { 0 };
 
     if inspect { 
-        println!("elapsed: {:?}\ttotal triangles at this process: {:?}", time::precise_time_s() - start, total); 
+        println!("elapsed: {:?}\ttotal triangles at this process: {:?}", start.elapsed(), total); 
     }
 }

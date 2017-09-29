@@ -4,11 +4,7 @@
 
 extern crate graph_map;
 
-use std::cmp::Ordering::*;
-
 use graph_map::GraphMMap;
-
-// use dataflow_join::graph::{GraphTrait, GraphMMap, gallop};
 
 fn main () {
     if let Some(source) = std::env::args().skip(1).next() {
@@ -35,7 +31,6 @@ fn raw_triangles(graph: &GraphMMap) -> u64 {
     let mut count = 0;
     for a in 0..graph.nodes() {
         let aaa = graph.edges(a);
-        // println!("degr[{}]: {}", a, aaa.len());
         for &b in aaa {
             let bbb = graph.edges(b as usize);
             count += if aaa.len() < bbb.len() { intersect(aaa, bbb) }
@@ -45,7 +40,7 @@ fn raw_triangles(graph: &GraphMMap) -> u64 {
     count
 }
 
-fn intersect(mut aaa: &[u32], mut bbb: &[u32]) -> u64 {
+fn intersect(aaa: &[u32], mut bbb: &[u32]) -> u64 {
     let mut count = 0;
     // magic gallop overhead # is 4
     if aaa.len() < bbb.len() / 4 {
@@ -63,16 +58,6 @@ fn intersect(mut aaa: &[u32], mut bbb: &[u32]) -> u64 {
                 count += 1;
             }
         }
-        // while aaa.len() > 0 && bbb.len() > 0 {
-        //     match aaa[0].cmp(&bbb[0]) {
-        //         Greater => { bbb = &bbb[1..]; },
-        //         Less    => { aaa = &aaa[1..]; },
-        //         Equal   => { aaa = &aaa[1..];
-        //                      bbb = &bbb[1..];
-        //                      count += 1;
-        //                    },
-        //     }
-        // }
     }
     count
 }

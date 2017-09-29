@@ -3,14 +3,9 @@ name = "alg3_dynamic"
 version = "0.1.0"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
-[dependencies.timely]
-git="http://github.com/frankmcsherry/timely-dataflow"
-
 [dependencies]
-timely_sort="*"
-rand="*"
-time="*"
-fnv="*"
+timely="0.3.0"
+#rand="*"
 
 [dependencies.graph_map]
 git="http://github.com/frankmcsherry/graph-map"

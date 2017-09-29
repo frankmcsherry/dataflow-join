@@ -16,13 +16,15 @@ use timely::dataflow::*;
 use timely::dataflow::operators::*;
 
 use index::Index;
-use extender::Indexable;
 use ::{IndexStream, StreamPrefixExtender, GenericJoin};
+
+pub type Node = u32;
+pub type Edge = (Node, Node);
 
 /// Handles to the forward and reverse graph indices.
 pub struct GraphStreamIndexHandle<T> {
-    forward: Rc<RefCell<Index<u32, u32, T>>>,
-    reverse: Rc<RefCell<Index<u32, u32, T>>>,
+    forward: Rc<RefCell<Index<Node, Node, T>>>,
+    reverse: Rc<RefCell<Index<Node, Node, T>>>,
 }
 
 impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
@@ -34,53 +36,55 @@ impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
 }
 
 /// Indices and updates for a graph stream.
-pub struct GraphStreamIndex<G: Scope> 
+pub struct GraphStreamIndex<G: Scope, H1: Fn(&Node)->u64, H2: Fn(&Node)->u64> 
     where G::Timestamp: Ord+::std::hash::Hash {
-    updates: Stream<G, ((u32, u32), i32)>,
-    pub forward: IndexStream<G, u32, u32>,
-    pub reverse: IndexStream<G, u32, u32>,
+    updates: Stream<G, (Edge, i32)>,
+    pub forward: IndexStream<Node, Node, H1, G::Timestamp>,
+    pub reverse: IndexStream<Node, Node, H2, G::Timestamp>,
 }
 
-impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
+impl<G: Scope, H1: Fn(&Node)->u64+'static, H2: Fn(&Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
 
     /// Constructs a new graph stream index from initial edges and an update stream.
-    pub fn from(initially: Stream<G, (u32, u32)>, 
-                updates: Stream<G, ((u32, u32), i32)>) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
-        let (forward, f_handle) = updates.index_from(&initially);
-        let (reverse, r_handle) = updates.map(|((src,dst),wgt)| ((dst,src),wgt))
-                                         .index_from(&initially.map(|(src,dst)| (dst,src)));
+    pub fn from(initially: Stream<G, Edge>, 
+                updates: Stream<G, (Edge, i32)>, hash1: H1, hash2: H2) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
+
+        let forward = IndexStream::from(hash1, &initially, &updates);
+        let reverse = IndexStream::from(hash2, &initially.map(|(src,dst)| (dst,src)),
+                                               &updates.map(|((src,dst),wgt)| ((dst,src),wgt)));
         let index = GraphStreamIndex {
             updates: updates,
             forward: forward,
             reverse: reverse,
         };
         let handles = GraphStreamIndexHandle {
-            forward: f_handle,
-            reverse: r_handle,
+            forward: index.forward.index.clone(),
+            reverse: index.reverse.index.clone(),
         };
         (index, handles)
     }
 
     /// Constructs a new graph stream index from initial edges and an update stream.
-    pub fn from_separately(initially_f: Stream<G, (u32, u32)>, initially_r: Stream<G, (u32, u32)>, 
-                updates: Stream<G, ((u32, u32), i32)>) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
-        let (forward, f_handle) = updates.index_from(&initially_f);
-        let (reverse, r_handle) = updates.map(|((src,dst),wgt)| ((dst,src),wgt))
-                                         .index_from(&initially_r.map(|(src,dst)| (dst,src)));
+    pub fn from_separately(initially_f: Stream<G, Edge>, initially_r: Stream<G, Edge>, 
+                updates: Stream<G, (Edge, i32)>, hash1: H1, hash2: H2) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
+
+        let forward = IndexStream::from(hash1, &initially_f, &updates);
+        let reverse = IndexStream::from(hash2, &initially_r.map(|(src,dst)| (dst,src)),
+                                               &updates.map(|((src,dst),wgt)| ((dst,src),wgt)));
         let index = GraphStreamIndex {
             updates: updates,
             forward: forward,
             reverse: reverse,
         };
         let handles = GraphStreamIndexHandle {
-            forward: f_handle,
-            reverse: r_handle,
+            forward: index.forward.index.clone(),
+            reverse: index.reverse.index.clone(),
         };
         (index, handles)
     }
 
     /// Constructs a dataflow subgraph to track a described motif.
-    pub fn track_motif<'a>(&self, description: &[(usize, usize)]) -> Stream<G, (Vec<u32>, i32)> where G: 'a {
+    pub fn track_motif<'a>(&self, description: &[(usize, usize)]) -> Stream<G, (Vec<Node>, i32)> where G: 'a {
         let mut result = self.updates.filter(|_| false).map(|_| (Vec::new(), 0));
         for relation in 0 .. description.len() {
             result = result.concat(&self.relation_update(relation, &description));
@@ -90,22 +94,22 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
 }
 
 
-trait IndexU32 {
-    fn index(&self, index: usize) -> &u32;
+trait IndexNode {
+    fn index(&self, index: usize) -> &Node;
 }
 
-impl IndexU32 for Vec<u32> {
-    fn index(&self, index: usize) -> &u32 { &self[index] }
+impl IndexNode for Vec<Node> {
+    fn index(&self, index: usize) -> &Node { &self[index] }
 }
-impl IndexU32 for [u32; 2] { fn index(&self, index: usize) -> &u32 { &self[index] } }
-impl IndexU32 for [u32; 3] { fn index(&self, index: usize) -> &u32 { &self[index] } }
-impl IndexU32 for [u32; 4] { fn index(&self, index: usize) -> &u32 { &self[index] } }
-impl IndexU32 for [u32; 5] { fn index(&self, index: usize) -> &u32 { &self[index] } }
+impl IndexNode for [Node; 2] { fn index(&self, index: usize) -> &Node { &self[index] } }
+impl IndexNode for [Node; 3] { fn index(&self, index: usize) -> &Node { &self[index] } }
+impl IndexNode for [Node; 4] { fn index(&self, index: usize) -> &Node { &self[index] } }
+impl IndexNode for [Node; 5] { fn index(&self, index: usize) -> &Node { &self[index] } }
 
-impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
+impl<G: Scope, H1: Fn(&Node)->u64+'static, H2: Fn(&Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
 
     // produces updates for changes in the indicated relation only.
-    fn relation_update<'a>(&self, relation: usize, relations: &[(usize, usize)]) -> Stream<G, (Vec<u32>, i32)> 
+    fn relation_update<'a>(&self, relation: usize, relations: &[(usize, usize)]) -> Stream<G, (Vec<Node>, i32)> 
         where G: 'a {
 
         // we need to determine an order on the attributes that ensures that each are bound by preceding attributes. 
@@ -148,14 +152,14 @@ impl<G: Scope> GraphStreamIndex<G> where G::Timestamp: Ord+::std::hash::Hash {
     /// Extends an indexable prefix, using a plan described by several (attr, is_forward, is_prior) cues.
     fn extend_attribute<'a, P>(&self, stream: &Stream<G, (P, i32)>, plan: &[(usize, bool, bool)]) -> Stream<G, (P, Vec<u32>, i32)> 
         where G: 'a,
-              P: ::std::fmt::Debug+ExchangeData+IndexU32 {
-        let mut extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=u32>+'a>> = vec![];
+              P: ::std::fmt::Debug+ExchangeData+IndexNode {
+        let mut extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=Node>+'a>> = vec![];
         for &(attribute, is_forward, prior) in plan {
             extenders.push(match (is_forward, prior) {
-                (true, true)    => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.le(t2))),
-                (true, false)   => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.lt(t2))),
-                (false, true)   => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.le(t2))),
-                (false, false)  => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), |k| *k as u64, |t1, t2| t1.lt(t2))),
+                (true, true)    => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), <_ as PartialOrd>::le)),
+                (true, false)   => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), <_ as PartialOrd>::lt)),
+                (false, true)   => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), <_ as PartialOrd>::le)),
+                (false, false)  => Box::new(self.reverse.extend_using(move |x: &P| x.index(attribute), <_ as PartialOrd>::lt)),
             })
         }
         stream.extend(extenders)

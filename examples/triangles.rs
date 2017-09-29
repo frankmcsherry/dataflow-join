@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate graph_map;
 extern crate alg3_dynamic;
@@ -15,7 +13,7 @@ use graph_map::GraphMMap;
 #[allow(non_snake_case)]
 fn main () {
 
-    let start = time::precise_time_s();
+    let start = ::std::time::Instant::now();
 
     let send = Arc::new(Mutex::new(0));
     let send2 = send.clone();
@@ -45,23 +43,22 @@ fn main () {
             // The updates also use the other relations with slightly stale data: updates to each
             // relation must not see updates for "later" relations (under some order on relations).
 
-            // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
-            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.filter(|_| false).map(|_| (0,0)));
+            let forward = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG);
+            let reverse = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG.map(|((src,dst),wgt)| ((dst,src),wgt)));
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
-            let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                       Box::new(forward.extend_using(|&(_,ref y)| y, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, <_ as PartialOrd>::lt)),
+                                       Box::new(forward.extend_using(|&(_,ref y)| y, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,p.1,e), w)));
 
             // dB(x,z) extends to y first through A(x,y) then C(y,z), using forward and reverse indices, respectively.
-            let dK3dB = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                       Box::new(reverse.extend_using(|&(_,ref z)| z, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK3dB = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, <_ as PartialOrd>::le)),
+                                       Box::new(reverse.extend_using(|&(_,ref z)| z, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,e,p.1), w)));
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let dK3dC = dG.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                       Box::new(reverse.extend_using(|&(_,ref z)| z, |&k| k as u64, |t1, t2| t1.le(t2)))])
+            let dK3dC = dG.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, <_ as PartialOrd>::le)),
+                                       Box::new(reverse.extend_using(|&(_,ref z)| z, <_ as PartialOrd>::le))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((e,p.0,p.1), w)));
 
             // accumulate all changes together
@@ -80,7 +77,7 @@ fn main () {
                         });
             }
 
-            (graph, cliques.probe(), f_handle, r_handle)
+            (graph, cliques.probe(), forward, reverse)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -107,7 +104,7 @@ fn main () {
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
         // start the experiment!
-        let start = time::precise_time_s();
+        let start = ::std::time::Instant::now();
         for node in 0 .. nodes {
 
             // introduce the node if it is this worker's responsibility
@@ -124,8 +121,8 @@ fn main () {
                 root.step_while(|| probe.less_than(input.time()));
 
                 // merge all of the indices we maintain.
-                forward.borrow_mut().merge_to(&prev);
-                reverse.borrow_mut().merge_to(&prev);
+                forward.index.borrow_mut().merge_to(&prev);
+                reverse.index.borrow_mut().merge_to(&prev);
             }
         }
 
@@ -133,7 +130,7 @@ fn main () {
         while root.step() { }
 
         if inspect { 
-            println!("worker {} elapsed: {:?}", index, time::precise_time_s() - start); 
+            println!("worker {} elapsed: {:?}", index, start.elapsed()); 
         }
 
     }).unwrap();
@@ -144,6 +141,6 @@ fn main () {
     else { 0 };
 
     if inspect { 
-        println!("elapsed: {:?}\ttotal triangles at this process: {:?}", time::precise_time_s() - start, total); 
+        println!("elapsed: {:?}\ttotal triangles at this process: {:?}", start.elapsed(), total); 
     }
 }

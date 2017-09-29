@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate graph_map;
 extern crate alg3_dynamic;
@@ -16,7 +14,7 @@ use graph_map::GraphMMap;
 #[allow(non_snake_case)]
 fn main () {
 
-    let start = time::precise_time_s();
+    let start = ::std::time::Instant::now();
 
     let (send, recv) = ::std::sync::mpsc::channel();
     let send = Arc::new(Mutex::new(send));
@@ -47,9 +45,8 @@ fn main () {
             // dQdE := dE x A x B x C x D x F
             // dQdF := dF x A x B x C x D x E
 
-            // we will index the data both by src and dst.
-            let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
-            let (reverse, r_handle) = dG.map(|((src,dst),wgt)| ((dst,src),wgt)).index_from(&dG.filter(|_| false).map(|_| (0,0)));
+            let forward = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG);
+            let reverse = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG.map(|((src,dst),wgt)| ((dst,src),wgt)));
 
             // We then pick an ordering of attributes for each derivative:
             // dQdA: we start with dA(a1, a2) and extend to a3 and then to a4. So there will be 2 extensions:
@@ -64,57 +61,57 @@ fn main () {
             //     (i)  C(a1, a4): Use forward index and use a1 as exchange;
             //     (ii) E(a2, a4): Use forward index and use a2 as exchange;
             //     (ii) F(a3, a4): Use forward index and use a3 as exchange;
-            let dK4dA1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                        Box::new(forward.extend_using(|&(_a1,ref a2)| a2, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dA1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2)| a1, <_ as PartialOrd>::lt)),
+                                        Box::new(forward.extend_using(|&(_a1,ref a2)| a2, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,e), wght)));
-            let dK4dA =  dK4dA1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dA =  dK4dA1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, <_ as PartialOrd>::lt)),
+                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, <_ as PartialOrd>::lt)),
+                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
 
             // dQdB(a1,a3): Similar to above first extend (a1, a3) to (a1, a2, a3). Then to (a1, a2, a3, a4).
-            let dK4dB1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                        Box::new(reverse.extend_using(|&(_a1,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dB1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3)| a1, <_ as PartialOrd>::le)),
+                                        Box::new(reverse.extend_using(|&(_a1,ref a3)| a3, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1), wght)));
-            let dK4dB =  dK4dB1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dB =  dK4dB1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, <_ as PartialOrd>::lt)),
+                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, <_ as PartialOrd>::lt)),
+                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
             
             // dQdC(a1,a4): Similar to above first extend (a1, a4) to (a1, a2, a4). Then to (a1, a2, a3, a4).
-            let dK4dC1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                        Box::new(reverse.extend_using(|&(_a1,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dC1 = dG.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a4)| a1, <_ as PartialOrd>::le)),
+                                        Box::new(reverse.extend_using(|&(_a1,ref a4)| a4, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1), wght)));
-            let dK4dC =  dK4dC1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dC =  dK4dC1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, <_ as PartialOrd>::le)),
+                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, <_ as PartialOrd>::lt)),
+                                            Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,e, p.2), wght)));
             
             // dQdD(a2,a3): Similar to above first extend (a2, a3) to (a1, a2, a3). Then to (a1, a2, a3, a4).
-            let dK4dD1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                        Box::new(reverse.extend_using(|&(_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.le(t2)))])
+            let dK4dD1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a3)| a2, <_ as PartialOrd>::le)),
+                                        Box::new(reverse.extend_using(|&(_a2,ref a3)| a3, <_ as PartialOrd>::le))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-            let dK4dD =  dK4dD1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, |&k| k as u64, |t1, t2| t1.lt(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dD =  dK4dD1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a3)| a1, <_ as PartialOrd>::le)),
+                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a3)| a2, <_ as PartialOrd>::lt)),
+                                            Box::new(forward.extend_using(|&(_a1,_a2,ref a3)| a3, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1,p.2,e), wght)));
             
             // dQdE(a2,a4): Similar to above first extend (a2, a4) to (a1, a2, a4). Then to (a1, a2, a3, a4).
-            let dK4dE1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                        Box::new(reverse.extend_using(|&(_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
+            let dK4dE1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a2,_a4)| a2, <_ as PartialOrd>::le)),
+                                        Box::new(reverse.extend_using(|&(_a2,ref a4)| a4, <_ as PartialOrd>::le))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-            let dK4dE =  dK4dE1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, |&k| k as u64, |t1, t2| t1.lt(t2)))])
+            let dK4dE =  dK4dE1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a2,_a4)| a1, <_ as PartialOrd>::le)),
+                                            Box::new(forward.extend_using(|&(_a1,ref a2,_a4)| a2, <_ as PartialOrd>::le)),
+                                            Box::new(reverse.extend_using(|&(_a1,_a2,ref a4)| a4, <_ as PartialOrd>::lt))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0,p.1, e, p.2), wght)));
             
             // dQdF(a3,a4): Similar to above first extend (a3, a4) to (a1, a3, a4). Then to (a1, a2, a3, a4).
-            let dK4dF1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a3,_a4)| a3, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                        Box::new(reverse.extend_using(|&(_a3,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
+            let dK4dF1 = dG.extend(vec![Box::new(reverse.extend_using(|&(ref a3,_a4)| a3, <_ as PartialOrd>::le)),
+                                        Box::new(reverse.extend_using(|&(_a3,ref a4)| a4, <_ as PartialOrd>::le))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((e, p.0, p.1), wght)));
-            let dK4dF =  dK4dF1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3,_a4)| a1, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(reverse.extend_using(|&(_a1,ref a3,_a4)| a3, |&k| k as u64, |t1, t2| t1.le(t2))),
-                                            Box::new(reverse.extend_using(|&(_a1,_a3,ref a4)| a4, |&k| k as u64, |t1, t2| t1.le(t2)))])
+            let dK4dF =  dK4dF1.extend(vec![Box::new(forward.extend_using(|&(ref a1,_a3,_a4)| a1, <_ as PartialOrd>::le)),
+                                            Box::new(reverse.extend_using(|&(_a1,ref a3,_a4)| a3, <_ as PartialOrd>::le)),
+                                            Box::new(reverse.extend_using(|&(_a1,_a3,ref a4)| a4, <_ as PartialOrd>::le))])
                 .flat_map(|(p,es,wght)| es.into_iter().map(move |e| ((p.0, e, p.1, p.2), wght)));
             
 
@@ -129,7 +126,7 @@ fn main () {
                     .inspect_batch(|t,x| println!("{:?}: {:?}", t, x))
                     .capture_into(send);
             }
-            (graph, cliques.probe(), f_handle, r_handle)
+            (graph, cliques.probe(), forward, reverse)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -156,7 +153,7 @@ fn main () {
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
         // start the experiment!
-        let start = time::precise_time_s();
+        let start = ::std::time::Instant::now();
         for node in 0 .. nodes {
 
             // introduce the node if it is this worker's responsibility
@@ -173,8 +170,8 @@ fn main () {
                 root.step_while(|| probe.less_than(input.time()));
 
                 // merge all of the indices we maintain.
-                forward.borrow_mut().merge_to(&prev);
-                reverse.borrow_mut().merge_to(&prev);
+                forward.index.borrow_mut().merge_to(&prev);
+                reverse.index.borrow_mut().merge_to(&prev);
             }
         }
 
@@ -182,7 +179,7 @@ fn main () {
         while root.step() { }
 
         if inspect { 
-            println!("worker {} elapsed: {:?}", index, time::precise_time_s() - start); 
+            println!("worker {} elapsed: {:?}", index, start.elapsed()); 
         }
 
     }).unwrap();
@@ -197,6 +194,6 @@ fn main () {
     } 
 
     if inspect { 
-        println!("elapsed: {:?}\ttotal 4-cliques at this process: {:?}", time::precise_time_s() - start, total); 
+        println!("elapsed: {:?}\ttotal 4-cliques at this process: {:?}", start.elapsed(), total); 
     }
 }

@@ -1,5 +1,3 @@
-extern crate rand;
-extern crate time;
 extern crate timely;
 extern crate alg3_dynamic;
 
@@ -18,7 +16,7 @@ type Node = u32;
 
 fn main () {
 
-    let start = time::precise_time_s();
+    let start = ::std::time::Instant::now();
 
     let send = Arc::new(Mutex::new(0));
     let send2 = send.clone();
@@ -58,7 +56,7 @@ fn main () {
             let (delta_input, delta) = builder.new_input::<((Node, Node), i32)>();
             
             // create indices and handles from the initial edges plus updates.
-            let (graph_index, handles) = motif::GraphStreamIndex::from_separately(graph1, graph2, delta);
+            let (graph_index, handles) = motif::GraphStreamIndex::from_separately(graph1, graph2, delta, |&k| k as u64, |&k| k as u64);
 
             // construct the motif dataflow subgraph.
             let motifs = graph_index.track_motif(&motif);
@@ -75,8 +73,8 @@ fn main () {
                     });
             }
 
-            let load_probe1 = graph_index.forward.stream.probe();
-            let load_probe2 = graph_index.reverse.stream.probe();
+            let load_probe1 = graph_index.forward.handle.clone();
+            let load_probe2 = graph_index.reverse.handle.clone();
 
             (graph_input1, graph_input2, delta_input, motifs.probe(), load_probe1, load_probe2, handles)
         });
@@ -199,5 +197,5 @@ fn main () {
     }).unwrap();
 
     let total = send2.lock().map(|x| *x).unwrap_or(0);
-    println!("elapsed: {:?}\ttotal motifs at this process: {:?}", time::precise_time_s() - start, total); 
+    println!("elapsed: {:?}\ttotal motifs at this process: {:?}", start.elapsed(), total); 
 }
