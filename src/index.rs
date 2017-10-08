@@ -79,7 +79,7 @@ mod compact {
                     &self.vals[lower .. upper]                
                 }
                 else {
-                    *key_cursor += 1;
+                    // *key_cursor += 1;
                     &[]
                 }
             }
