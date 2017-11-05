@@ -78,14 +78,9 @@ mod compact {
                     *key_cursor += 1;
                     &self.vals[lower .. upper]                
                 }
-                else {
-                    // *key_cursor += 1;
-                    &[]
-                }
+                else { &[] }
             }
-            else {
-                &[]
-            }
+            else { &[] }
         }
     }
 }
