@@ -29,10 +29,13 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input, probe, forward, reverse) = root.dataflow::<u32,_,_>(|builder| {
+        let (mut input, mut query, probe, reverse) = root.dataflow::<u32,_,_>(|builder| {
 
             // A stream of changes to the set of *triangles*, where a < b < c.
             let (graph, dT) = builder.new_input::<((u32, u32, u32), i32)>();
+
+            // A stream of changes to the set of *triangles*, where a < b < c.
+            let (query, dQ) = builder.new_input::<((u32, u32, u32), i32)>();
 
             // Our query is K4(w,x,y,z) := T(w,x,y), T(w,x,z), T(w,y,z), T(x,y,z)
             //
@@ -60,40 +63,50 @@ fn main () {
             // field that follows it.
 
             // create two indices, one "forward" from (a,b) to c, and one "reverse" from (a,c) to b.
-            let forward = IndexStream::from(|(a,b)| (a + b) as u64, &Vec::new().to_stream(builder), &dT.map(|((a,b,c),wgt)| (((a,b),c),wgt)));
-            let reverse = IndexStream::from(|(a,b)| (a + b) as u64, &Vec::new().to_stream(builder), &dT.map(|((a,b,c),wgt)| (((a,c),b),wgt)));
+            // let forward = IndexStream::from(|(a,b)| (a + b) as u64, &Vec::new().to_stream(builder), &dT.map(|((a,b,c),wgt)| (((a,b),c),wgt)));
+            let reverse = IndexStream::from(|(a,c)| (a + c) as u64, &dT.map(|((a,b,c),wgt)| ((a,c),b)), &Vec::new().to_stream(builder));
 
-            // dK4dA(w,x,y,z) := dA(w,x,y), B(w,x,z), C(w,y,z)
-            let dK4dA = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_y)| (w,x), <_ as PartialOrd>::lt)),
-                                       Box::new(forward.extend_using(|&(w,_x,y)| (w,y), <_ as PartialOrd>::lt))])
-                          .flat_map(|((w,x,y), zs, wgt)| zs.into_iter().map(move |z| ((w,x,y,z),wgt)));
+            // // dK4dA(w,x,y,z) := dA(w,x,y), B(w,x,z), C(w,y,z)
+            // let dK4dA = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_y)| (w,x), <_ as PartialOrd>::lt)),
+            //                            Box::new(forward.extend_using(|&(w,_x,y)| (w,y), <_ as PartialOrd>::lt))])
+            //               .flat_map(|((w,x,y), zs, wgt)| zs.into_iter().map(move |z| ((w,x,y,z),wgt)));
 
-            // dK4dB(w,x,y,z) := dB(w,x,z), A(w,x,y), C(w,y,z)
-            let dK4dB = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_z)| (w,x), <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(w,_x,z)| (w,z), <_ as PartialOrd>::lt))])
-                          .flat_map(|((w,x,z), ys, wgt)| ys.into_iter().map(move |y| ((w,x,y,z),wgt)));
+            // // dK4dB(w,x,y,z) := dB(w,x,z), A(w,x,y), C(w,y,z)
+            // let dK4dB = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_z)| (w,x), <_ as PartialOrd>::le)),
+            //                            Box::new(reverse.extend_using(|&(w,_x,z)| (w,z), <_ as PartialOrd>::lt))])
+            //               .flat_map(|((w,x,z), ys, wgt)| ys.into_iter().map(move |y| ((w,x,y,z),wgt)));
 
             // dK4dC(w,x,y,z) := dC(w,y,z), A(w,x,y), B(w,x,z)
-            let dK4dC = dT.extend(vec![Box::new(reverse.extend_using(|&(w,y,_z)| (w,y), <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(w,_y,z)| (w,z), <_ as PartialOrd>::le))])
-                          .flat_map(|((w,y,z), xs, wgt)| xs.into_iter().map(move |x| ((w,x,y,z),wgt)));
+            let dK4dC = dQ.extend(vec![Box::new(reverse.extend_using(|&(w,y,_z)| (w,y), <_ as PartialOrd>::le)),
+                                       Box::new(reverse.extend_using(|&(w,_y,z)| (w,z), <_ as PartialOrd>::le))]);
+                          // .flat_map(|((w,y,z), xs, wgt)| xs.into_iter().map(move |x| ((w,x,y,z),wgt)));
 
-            let dK4 = dK4dA.concat(&dK4dB).concat(&dK4dC);
+            // let dK4 = dK4dA.concat(&dK4dB).concat(&dK4dC);
+            let dK4 = dK4dC;
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {
-                dK4.exchange(|x| (x.0).0 as u64)
-                       // .inspect_batch(|t,x| println!("{:?}: {:?}", t, x))
-                       .count()
-                       .inspect_batch(move |t,x| println!("{:?}: {:?}", t, x))
-                       .inspect_batch(move |_,x| { 
-                            if let Ok(mut bound) = send.lock() {
-                                *bound += x[0];
-                            }
-                        });
+                dK4.inspect_batch(move |_,x| { 
+                    if let Ok(mut bound) = send.lock() {
+                        for xx in x.iter() {
+                           *bound += xx.1.len();
+                       }
+                    }
+                });
+
+                // dK4.exchange(|x| (x.0).0 as u64)
+                //        // .inspect_batch(|t,x| println!("{:?}: {:?}", t, x))
+                //        .count()
+                //        .inspect_batch(move |t,x| println!("{:?}: {:?}", t, x))
+                //        .inspect_batch(move |_,x| { 
+                //             if let Ok(mut bound) = send.lock() {
+                //                 *bound += x[0];
+                //             }
+                //         });
             }
 
-            (graph, dK4.probe(), forward, reverse)
+            // (graph, dK4.probe(), forward, reverse)
+            (graph, query, dK4.probe(), reverse)
         });
 
         // load fragment of input graph into memory to avoid io while running.
@@ -116,10 +129,16 @@ fn main () {
 
         println!("{:?}\tworker {} computed {} triangles", start.elapsed(), root.index(), triangles.len());
 
+        for &(a,b,c) in triangles.iter() {
+            input.send(((a,b,c), 1));
+        }
+
         // synchronize with other workers.
-        let prev = input.time().clone();
-        input.advance_to(prev.inner + 1);
-        while probe.less_than(input.time()) { root.step(); }
+        let prev = query.time().clone();
+        input.close();
+        // input.advance_to(prev.inner + 1);
+        query.advance_to(prev.inner + 1);
+        while probe.less_than(query.time()) { root.step(); }
 
         // number of nodes introduced at a time
         let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
@@ -131,20 +150,20 @@ fn main () {
         while sent < triangles.len() {
             let to_send = std::cmp::min(batch / root.peers(), triangles.len() - sent);
             for off in 0 .. to_send {
-                input.send((triangles[sent + off], 1));
+                query.send((triangles[sent + off], 1));
             }
             sent += to_send;
 
-            let prev = input.time().clone();
-            input.advance_to(prev.inner + 1);
-            while probe.less_than(input.time()) { root.step(); }
+            let prev = query.time().clone();
+            query.advance_to(prev.inner + 1);
+            while probe.less_than(query.time()) { root.step(); }
 
             // merge all of the indices we maintain.
-            forward.index.borrow_mut().merge_to(&prev);
+            // forward.index.borrow_mut().merge_to(&prev);
             reverse.index.borrow_mut().merge_to(&prev);
         }
 
-        input.close();
+        query.close();
         while root.step() { }
 
         if inspect { 
