@@ -98,18 +98,18 @@ fn main () {
 
         // load fragment of input graph into memory to avoid io while running.
         let filename = std::env::args().nth(1).unwrap();
-        let graph = GraphMMap::new(&filename);
+        let graph = GraphMap::new(&filename);
 
         let nodes = graph.nodes();
         let mut triangles = Vec::new();
 
-        let mut v1 = root.index();
+        let mut v1 = root.index() as u32;
         while v1 < graph.nodes() {
-            let v1f = graph.edges(v1);
+            let v1f = graph.forward(v1);
             for (index_v2, &v2) in v1f.iter().enumerate() {
-                intersect_and(&v1f[(index_v2+1)..], graph.edges(v2 as usize), |v3| triangles.push((v1 as u32, v2, v3)));
+                intersect_and(&v1f[(index_v2+1)..], graph.forward(v2), |v3| triangles.push((v1 as u32, v2, v3)));
             }
-            v1 += root.peers();
+            v1 += root.peers() as u32;
         }
 
         drop(graph);
@@ -163,6 +163,45 @@ fn main () {
     }
 }
 
+
+struct GraphMap {
+    map: GraphMMap,
+    reverse: Vec<u32>,
+}
+
+
+impl GraphMap {
+    pub fn new(filename: &str) -> Self {
+
+        let map = GraphMMap::new(filename);
+
+        let mut reverse = vec![0; map.nodes()];
+        for node in 0 .. map.nodes() {
+            for &neighbor in map.edges(node) {
+                if (neighbor as usize) < node {
+                    reverse[node] += 1;
+                }
+                if (neighbor as usize) == node {
+                    panic!("self-loop");
+                }
+            }
+        }
+
+        GraphMap {
+            map: map,
+            reverse: reverse,
+        }
+    }
+
+    #[inline(always)]
+    pub fn nodes(&self) -> u32 { self.map.nodes() as u32 }
+    #[inline(always)]
+    pub fn edges(&self, node: u32) -> &[u32] { self.map.edges(node as usize) }
+    #[inline(always)]
+    pub fn forward(&self, node: u32) -> &[u32] { 
+        &self.edges(node)[(self.reverse[node as usize] as usize)..]
+    }
+}
 
 fn intersect_and<F: FnMut(u32)>(aaa: &[u32], mut bbb: &[u32], mut func: F) {
 
