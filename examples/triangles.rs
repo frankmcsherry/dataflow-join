@@ -43,22 +43,22 @@ fn main () {
             // The updates also use the other relations with slightly stale data: updates to each
             // relation must not see updates for "later" relations (under some order on relations).
 
-            let forward = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG);
-            let reverse = IndexStream::from(|&k| k as u64, &Vec::new().to_stream(builder), &dG.map(|((src,dst),wgt)| ((dst,src),wgt)));
+            let forward = IndexStream::from(|k| k as u64, &Vec::new().to_stream(builder), &dG);
+            let reverse = IndexStream::from(|k| k as u64, &Vec::new().to_stream(builder), &dG.map(|((src,dst),wgt)| ((dst,src),wgt)));
 
             // dA(x,y) extends to z first through C(x,z) then B(y,z), both using forward indices.
-            let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, <_ as PartialOrd>::lt)),
-                                       Box::new(forward.extend_using(|&(_,ref y)| y, <_ as PartialOrd>::lt))])
+            let dK3dA = dG.extend(vec![Box::new(forward.extend_using(|&(x,_)| x, <_ as PartialOrd>::lt)),
+                                       Box::new(forward.extend_using(|&(_,y)| y, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,p.1,e), w)));
 
             // dB(x,z) extends to y first through A(x,y) then C(y,z), using forward and reverse indices, respectively.
-            let dK3dB = dG.extend(vec![Box::new(forward.extend_using(|&(ref x,_)| x, <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(_,ref z)| z, <_ as PartialOrd>::lt))])
+            let dK3dB = dG.extend(vec![Box::new(forward.extend_using(|&(x,_)| x, <_ as PartialOrd>::le)),
+                                       Box::new(reverse.extend_using(|&(_,z)| z, <_ as PartialOrd>::lt))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((p.0,e,p.1), w)));
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let dK3dC = dG.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(_,ref z)| z, <_ as PartialOrd>::le))])
+            let dK3dC = dG.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y, <_ as PartialOrd>::le)),
+                                       Box::new(reverse.extend_using(|&(_,z)| z, <_ as PartialOrd>::le))])
                           .flat_map(|(p,es,w)| es.into_iter().map(move |e| ((e,p.0,p.1), w)));
 
             // accumulate all changes together

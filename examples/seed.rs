@@ -96,58 +96,60 @@ fn main () {
             (graph, dK4.probe(), forward, reverse)
         });
 
-        // // load fragment of input graph into memory to avoid io while running.
-        // let filename = std::env::args().nth(1).unwrap();
-        // let graph = GraphMMap::new(&filename);
+        // load fragment of input graph into memory to avoid io while running.
+        let filename = std::env::args().nth(1).unwrap();
+        let graph = GraphMMap::new(&filename);
 
-        // let nodes = graph.nodes();
-        // let mut triangles = Vec::new();
+        let nodes = graph.nodes();
+        let mut triangles = Vec::new();
 
-        // for node in 0 .. graph.nodes() {
-        //     if node % peers == index {
-        //         edges.push(graph.edges(node).to_vec());
-        //     }
-        // }
+        let mut v1 = root.index();
+        while v1 < graph.nodes() {
+            let v1f = graph.edges(v1);
+            for (index_v2, &v2) in v1f.iter().enumerate() {
+                intersect_and(&v1f[(index_v2+1)..], graph.edges(v2 as usize), |v3| triangles.push((v1 as u32, v2, v3)));
+            }
+            v1 += root.peers();
+        }
 
-        // drop(graph);
+        drop(graph);
 
-        // // synchronize with other workers.
-        // let prev = input.time().clone();
-        // input.advance_to(prev.inner + 1);
-        // root.step_while(|| probe.less_than(input.time()));
+        println!("{:?}\tworker {} computed {} triangles", start.elapsed(), root.index(), triangles.len());
 
-        // // number of nodes introduced at a time
-        // let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
+        // synchronize with other workers.
+        let prev = input.time().clone();
+        input.advance_to(prev.inner + 1);
+        root.step_while(|| probe.less_than(input.time()));
 
-        // // start the experiment!
-        // let start = ::std::time::Instant::now();
-        // for node in 0 .. nodes {
+        // number of nodes introduced at a time
+        let batch: usize = std::env::args().nth(2).unwrap().parse().unwrap();
 
-        //     // introduce the node if it is this worker's responsibility
-        //     if node % peers == index {
-        //         for &edge in &edges[node / peers] {
-        //             input.send(((node as u32, edge), 1));
-        //         }
-        //     }
+        // start the experiment!
+        let start = ::std::time::Instant::now();
 
-        //     // if at a batch boundary, advance time and do work.
-        //     if node % batch == (batch - 1) {
-        //         let prev = input.time().clone();
-        //         input.advance_to(prev.inner + 1);
-        //         root.step_while(|| probe.less_than(input.time()));
+        let mut sent = 0;
+        while sent < triangles.len() {
+            let to_send = std::cmp::min(batch / root.peers(), triangles.len() - sent);
+            for off in 0 .. to_send {
+                input.send((triangles[sent + off], 1));
+            }
+            sent += to_send;
 
-        //         // merge all of the indices we maintain.
-        //         forward.index.borrow_mut().merge_to(&prev);
-        //         reverse.index.borrow_mut().merge_to(&prev);
-        //     }
-        // }
+            let prev = input.time().clone();
+            input.advance_to(prev.inner + 1);
+            while probe.less_than(input.time()) { root.step(); }
 
-        // input.close();
-        // while root.step() { }
+            // merge all of the indices we maintain.
+            forward.index.borrow_mut().merge_to(&prev);
+            reverse.index.borrow_mut().merge_to(&prev);
+        }
 
-        // if inspect { 
-        //     println!("worker {} elapsed: {:?}", index, start.elapsed()); 
-        // }
+        input.close();
+        while root.step() { }
+
+        if inspect { 
+            println!("worker {} elapsed: {:?}", index, start.elapsed()); 
+        }
 
     }).unwrap();
 
@@ -159,4 +161,80 @@ fn main () {
     if inspect { 
         println!("elapsed: {:?}\ttotal triangles at this process: {:?}", start.elapsed(), total); 
     }
+}
+
+
+fn intersect_and<F: FnMut(u32)>(aaa: &[u32], mut bbb: &[u32], mut func: F) {
+
+    if aaa.len() > bbb.len() {
+        intersect_and(bbb, aaa, func);
+    }
+    else {
+        if aaa.len() < bbb.len() / 16 {
+            for &a in aaa.iter() {
+                bbb = gallop_ge(bbb, &a);
+                if bbb.len() > 0 && bbb[0] == a {
+                    func(a)
+                }
+            }
+        }
+        else {
+            for &a in aaa.iter() {
+                while bbb.len() > 0 && bbb[0] < a {
+                    bbb = &bbb[1..];
+                }
+                if bbb.len() > 0 && a == bbb[0] {
+                    func(a);
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+pub fn gallop_ge<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
+    // if empty slice, or already >= element, return
+    if slice.len() > 0 && &slice[0] < value {
+        let mut step = 1;
+        while step < slice.len() && &slice[step] < value {
+            slice = &slice[step..];
+            step = step << 1;
+        }
+
+        step = step >> 1;
+        while step > 0 {
+            if step < slice.len() && &slice[step] < value {
+                slice = &slice[step..];
+            }
+            step = step >> 1;
+        }
+
+        slice = &slice[1..]; // advance one, as we always stayed < value
+    }
+
+    return slice;
+}
+
+#[inline(always)]
+pub fn gallop_gt<'a, T: Ord>(mut slice: &'a [T], value: &T) -> &'a [T] {
+    // if empty slice, or already > element, return
+    if slice.len() > 0 && &slice[0] <= value {
+        let mut step = 1;
+        while step < slice.len() && &slice[step] <= value {
+            slice = &slice[step..];
+            step = step << 1;
+        }
+
+        step = step >> 1;
+        while step > 0 {
+            if step < slice.len() && &slice[step] <= value {
+                slice = &slice[step..];
+            }
+            step = step >> 1;
+        }
+
+        slice = &slice[1..]; // advance one, as we always stayed <= value
+    }
+
+    return slice;
 }

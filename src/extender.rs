@@ -23,7 +23,7 @@ use {Index, StreamPrefixExtender};
 /// about whether outstanding times might still exist less than any query time.
 /// There is also a function `hash` from the key type `K` to `u64` values to indicate how 
 /// the data are partitioned, so that users can align their query streams.
-pub struct IndexStream<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(&K)->u64, T: Timestamp> {
+pub struct IndexStream<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp> {
     /// Times completely absorded into the index.
     pub handle: ProbeHandle<T>,
     /// The index itself.
@@ -33,7 +33,7 @@ pub struct IndexStream<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(&K)->u64, T: Times
 }
 
 
-impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(&K)->u64, T: Timestamp+Ord> IndexStream<K, V, H, T> {
+impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStream<K, V, H, T> {
     /// Extends an `IndexStream` using the supplied functions.
     ///
     /// The `logic` function maps prefixes to index keys.
@@ -41,7 +41,7 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(&K)->u64, T: Timestamp+Ord> IndexStr
     /// on the need.
     pub fn extend_using<P, L, F>(&self, logic: L, func: F) -> Rc<IndexExtender<K, V, T, P, L, H, F>> 
     where 
-        L: Fn(&P)->&K+'static,
+        L: Fn(&P)->K+'static,
         F: Fn(&T, &T)->bool+'static
     {
         Rc::new(IndexExtender {
@@ -80,8 +80,8 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(&K)->u64, T: Timestamp+Ord> IndexStr
         let mut map = HashMap::new();
         let mut sorter = Some(MergeSorter::new());
 
-        let exch1 = Exchange::new(move |&((ref x,_),_)| (*hash_1)(x));
-        let exch2 = Exchange::new(move |&(ref x,_)| (*hash_2)(x));
+        let exch1 = Exchange::new(move |x: &((K,V),i32)| (*hash_1)((x.0).0.clone()));
+        let exch2 = Exchange::new(move |x: &(K,V)| (*hash_2)(x.0.clone()));
         let handle = updates.binary_notify::<_,(),_,_,_>(initially, exch1, exch2, "Index", vec![], 
 
             move |input1, input2,_output,notificator| {
@@ -138,8 +138,8 @@ where
     K: Ord+Hash+Clone,
     V: Ord+Clone,
     T: Timestamp,
-    L: Fn(&P)->&K,
-    H: Fn(&K)->u64,
+    L: Fn(&P)->K,
+    H: Fn(K)->u64,
     F: Fn(&T, &T)->bool,
 {
     handle: ProbeHandle<T>,
@@ -157,8 +157,8 @@ where
     G: Scope,
     G::Timestamp: Timestamp+Ord+Clone,//+::std::hash::Hash+Ord,
     P: ExchangeData+Debug,
-    L: Fn(&P)->&K+'static,
-    H: Fn(&K)->u64+'static,
+    L: Fn(&P)->K+'static,
+    H: Fn(K)->u64+'static,
     F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static 
 {
     type Prefix = P;

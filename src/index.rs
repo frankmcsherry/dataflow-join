@@ -85,198 +85,6 @@ mod compact {
     }
 }
 
-// mod edge_list {
-
-//     use super::advance;
-
-//     /// A list of somewhat organized edges from a vertex.
-//     ///
-//     /// The `edge_list` member is a sequence of sorted runs of the form
-//     /// 
-//     /// [(e1,w1), (e2,w2), ... (len, 0)]^*
-//     ///
-//     /// where `len` is the number of edge entries. There may be multiple runs, which can be
-//     /// found by starting from the last entry and stepping forward guided by `len` entries.
-//     pub struct EdgeList {
-//         edge_list: Vec<(u32, i32)>,
-//         effort: u32,
-//         count: i32,     // accumulated diffs; could be negative
-//     }
-
-//     impl EdgeList {
-
-//         /// Allocates a new empty `EdgeList`.
-//         pub fn new() -> EdgeList { 
-//             EdgeList { 
-//                 edge_list: vec![], 
-//                 effort: 0,
-//                 count: 0,
-//             } 
-//         }
-
-//         #[inline(always)]
-//         pub fn count(&self) -> i32 { self.count }
-
-//         // The next methods are, annoyingly, in support of pushing updates into the LSM.
-//         // Because insertion is a bit interactive, with tests on timestamps and setting 
-//         // of weights for moved records, this is not supplied as an iterator to use for 
-//         // extending. Instead, the user is expected to call `position`, call `push` as
-//         // many times as they like, and then call `seal_from` with the position they got
-//         // from the first call. Sorry!
-
-//         /// Reports the current position of the LSM write cursor.
-//         #[inline(always)]
-//         pub fn position(&self) -> usize { self.edge_list.len() }
-
-//         #[inline(always)]
-//         pub fn push(&mut self, update: (u32, i32)) {
-//             self.count += update.1;
-//             self.edge_list.push(update);
-//         }
-
-//         #[inline(always)]
-//         pub fn seal_from(&mut self, len: usize) {
-//             let new_len = self.edge_list.len();
-//             if new_len - len > 0 {
-//                 self.edge_list.push(((new_len - len) as u32, 0));
-//                 if len > 0 {
-//                     // we now have from len .. now as new data.
-//                     let mut mess = (new_len - len) as u32;
-//                     while (new_len - 1) > mess as usize 
-//                        && mess > self.edge_list[(new_len - 1) - mess as usize].0 / 2 {
-//                         mess += self.edge_list[(new_len - 1) - mess as usize].0 + 1;
-//                     }
-
-//                     self.consolidate_from(new_len - mess as usize);
-//                 }
-//                 else {
-//                     self.consolidate_from(0);
-//                 }
-//             }
-//         }
-
-//         #[inline(always)]
-//         pub fn proposals(&mut self) -> &[(u32, i32)] {
-//             self.consolidate_from(0);
-//             if self.edge_list.len() > 0 {
-//                 &self.edge_list[.. self.edge_list.len() - 1]
-//             }
-//             else {
-//                 &self.edge_list[..]
-//             }
-//         }
-
-//         /// Consolidates all edges from position `index` onward.
-//         ///
-//         /// This method reduces the complexity of the edge list, in the most significant case
-//         /// when called with `index` equal to zero, in which case the entire edge list is 
-//         /// consolidated into one run.
-//         fn consolidate_from(&mut self, index: usize) {
-//             if self.messy() {
-//                 self.edge_list[index..].sort();
-
-//                 let mut cursor = index;
-//                 for i in (index+1) .. self.edge_list.len() {
-//                     if self.edge_list[i].0 == self.edge_list[cursor].0 {
-//                         self.edge_list[cursor].1 += self.edge_list[i].1;
-//                     }
-//                     else {
-//                         if self.edge_list[cursor].1 != 0 {
-//                             cursor += 1;
-//                         }
-//                         self.edge_list[cursor] = self.edge_list[i];
-//                     }
-//                 }
-//                 if self.edge_list[cursor].1 != 0 {
-//                     cursor += 1;
-//                 }
-
-//                 self.edge_list.truncate(cursor);
-//                 if cursor - index > 0 {
-//                     self.edge_list.push(((cursor - index) as u32, 0));
-//                 }
-//             }
-//         }
-
-//         /// Indicates whether there is more than one run of edges.
-//         pub fn messy(&self) -> bool {
-//             if self.edge_list.len() > 0 {
-//                 let last = self.edge_list.len() - 1;
-//                 self.edge_list.len() > 1 && self.edge_list[last] != (last as u32, 0)
-//             }
-//             else {
-//                 false
-//             }
-//         }
-
-//         /// Indicate that a certain amount of effort will be expended.
-//         ///
-//         /// This gives the `EdgeList` a chance to simplify its representation in response to work
-//         /// that is about to be done. If a great deal of work will be done, it may make sense to
-//         /// consolidate the edge list to simplify that work.
-//         #[inline(never)]
-//         pub fn expend(&mut self, effort: u32) {
-//             if self.messy() {
-//                 self.effort += effort;
-//                 if self.effort > self.edge_list.len() as u32 {
-//                     self.consolidate_from(0);
-//                 }
-//                 self.effort = 0;
-//             }
-//         }
-
-//         /// Populates `temp` with accumulated counts for corresponding elements in `values`.
-//         ///
-//         /// This method is used to assist with intersection testing, by reporting accumulated
-//         /// counts for each element of the supplied `values`.
-//         #[inline(never)]
-//         pub fn intersect(&self, values: &[u32], temp: &mut Vec<i32>) {
-            
-//             // init counts.
-//             temp.clear();
-//             for _ in 0 .. values.len() { 
-//                 temp.push(0); 
-//             }
-            
-//             let mut slice = &self.edge_list[..];
-//             while slice.len() > 0 {
-//                 let len = slice.len();
-//                 let run = slice[len-1].0;
-
-//                 // want to intersect `edges` and `slice`.
-//                 let edges = &slice[(len - (run as usize + 1)).. (len-1)];
-
-//                 let mut e_cursor = 0;
-//                 let mut v_cursor = 0;
-
-//                 // merge by galloping
-//                 while edges.len() > e_cursor && values.len() > v_cursor {
-//                     match edges[e_cursor].0.cmp(&values[v_cursor]) {
-//                         ::std::cmp::Ordering::Less => {
-//                             let step = advance(&edges[e_cursor..], |x| x.0 < values[v_cursor]);
-//                             assert!(step > 0);
-//                             e_cursor += step;
-//                         },
-//                         ::std::cmp::Ordering::Equal => {
-//                             temp[v_cursor] += edges[e_cursor].1;
-//                             e_cursor += 1;
-//                             v_cursor += 1;
-//                         },
-//                         ::std::cmp::Ordering::Greater => {
-//                             let step = advance(&values[v_cursor..], |&x| x < edges[e_cursor].0);
-//                             assert!(step > 0);
-//                             v_cursor += step;
-//                         },
-//                     }
-//                 } 
-
-//                 // trim off the run and the footer.
-//                 slice = &slice[..(len - (run as usize + 1))];
-//             }
-//         }
-//     }
-// }
-
 mod edge_list_neu {
 
     use super::advance;
@@ -528,7 +336,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     /// tuple.
     #[inline(never)]
     pub fn count<P,K,Valid>(&mut self, data: &mut Vec<(P, u64, u64, i32)>, func: &K, _valid: &Valid, ident: u64) 
-    where K:Fn(&P)->&Key, Valid:Fn(&T)->bool {
+    where K:Fn(&P)->Key, Valid:Fn(&T)->bool {
 
         // sort data by key, to share work for the same key.
         data.sort_unstable_by(|x,y| func(&x.0).cmp(&(func(&y.0))));
@@ -547,13 +355,13 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
                 let key = func(&data[index].0);
 
                 // (ia) update `count` by the number of values in `self.compact`.
-                count += self.compact.values_from(key, &mut c_cursor).len() as u64;
+                count += self.compact.values_from(&key, &mut c_cursor).len() as u64;
 
                 // (ib) update `count` by values in `self.edges`.
-                count += self.edges.get(key).map(|entry| entry.count() as u64).unwrap_or(0);
+                count += self.edges.get(&key).map(|entry| entry.count() as u64).unwrap_or(0);
 
                 // (ic) update `count` by values in `self.diffs`. (an over-estimate)
-                count += self.diffs.values_from(key, &mut d_cursor).len() as u64;
+                count += self.diffs.values_from(&key, &mut d_cursor).len() as u64;
             }
 
             // (ii) we may have multiple records with the same key, do them all.
@@ -573,7 +381,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     /// Proposes extensions for prefixes based on the index.
     #[inline(never)]
     pub fn propose<P, K, Valid>(&mut self, data: &mut Vec<(P, Vec<Val>, i32)>, func: &K, valid: &Valid) 
-    where K:Fn(&P)->&Key, Valid:Fn(&T)->bool {
+    where K:Fn(&P)->Key, Valid:Fn(&T)->bool {
 
         // sorting allows us to re-use computation for the same key, and simplifies the searching 
         // of self.compact and self.diffs.
@@ -643,7 +451,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     /// Restricts extensions for prefixes to those found in the index.
     #[inline(never)]
     pub fn intersect<P, F, Valid>(&mut self, data: &mut Vec<(P, Vec<Val>, i32)>, func: &F, valid: &Valid) 
-    where F: Fn(&P)->&Key, Valid: Fn(&T)->bool {
+    where F: Fn(&P)->Key, Valid: Fn(&T)->bool {
 
         // sorting data by key allows us to re-use some work / compact representations.
         data.sort_unstable_by(|x,y| func(&x.0).cmp(&(func(&y.0))));
@@ -672,14 +480,14 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
             }
 
             // (i) position `self.compact` cursor so that we can re-use it.
-            let compact_slice = self.compact.values_from(func(&data[index].0), &mut offset_cursor);
+            let compact_slice = self.compact.values_from(&func(&data[index].0), &mut offset_cursor);
 
             // (ii) prepare non-compact updates. if our effort level is large, consolidate. 
-            let mut entry = self.edges.get_mut(func(&data[index].0));
+            let mut entry = self.edges.get_mut(&func(&data[index].0));
             entry.as_mut().map(|x| x.expend(effort as u32));
 
             // (iii) position `self.diffs` cursor so that we can re-use it.
-            let diffs_slice = self.diffs.values_from(func(&data[index].0), &mut diffs_cursor);
+            let diffs_slice = self.diffs.values_from(&func(&data[index].0), &mut diffs_cursor);
         
 
             // we may have multiple records with the same key, do them all.

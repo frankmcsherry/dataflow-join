@@ -60,7 +60,7 @@ fn main () {
             let (delta_input, delta) = builder.new_input::<((Node, Node), i32)>();
             
             // // create indices and handles from the initial edges plus updates.
-            let (graph_index, handles) = motif::GraphStreamIndex::from_separately(graph1, graph2, delta, |&k| k as u64, |&k| k as u64);
+            let (graph_index, handles) = motif::GraphStreamIndex::from_separately(graph1, graph2, delta, |k| k as u64, |k| k as u64);
 
             // construct the motif dataflow subgraph.
             let motifs = graph_index.track_motif(&motif);

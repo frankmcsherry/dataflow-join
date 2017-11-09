@@ -36,14 +36,14 @@ impl<T: Ord+Clone+::std::fmt::Debug> GraphStreamIndexHandle<T> {
 }
 
 /// Indices and updates for a graph stream.
-pub struct GraphStreamIndex<G: Scope, H1: Fn(&Node)->u64, H2: Fn(&Node)->u64> 
+pub struct GraphStreamIndex<G: Scope, H1: Fn(Node)->u64, H2: Fn(Node)->u64> 
     where G::Timestamp: Ord+::std::hash::Hash {
     updates: Stream<G, (Edge, i32)>,
     pub forward: IndexStream<Node, Node, H1, G::Timestamp>,
     pub reverse: IndexStream<Node, Node, H2, G::Timestamp>,
 }
 
-impl<G: Scope, H1: Fn(&Node)->u64+'static, H2: Fn(&Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
+impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
 
     /// Constructs a new graph stream index from initial edges and an update stream.
     pub fn from(initially: Stream<G, Edge>, 
@@ -95,18 +95,18 @@ impl<G: Scope, H1: Fn(&Node)->u64+'static, H2: Fn(&Node)->u64+'static> GraphStre
 
 
 trait IndexNode {
-    fn index(&self, index: usize) -> &Node;
+    fn index(&self, index: usize) -> Node;
 }
 
 impl IndexNode for Vec<Node> {
-    fn index(&self, index: usize) -> &Node { &self[index] }
+    fn index(&self, index: usize) -> Node { self[index] }
 }
-impl IndexNode for [Node; 2] { fn index(&self, index: usize) -> &Node { &self[index] } }
-impl IndexNode for [Node; 3] { fn index(&self, index: usize) -> &Node { &self[index] } }
-impl IndexNode for [Node; 4] { fn index(&self, index: usize) -> &Node { &self[index] } }
-impl IndexNode for [Node; 5] { fn index(&self, index: usize) -> &Node { &self[index] } }
+impl IndexNode for [Node; 2] { fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 3] { fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 4] { fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 5] { fn index(&self, index: usize) -> Node { self[index] } }
 
-impl<G: Scope, H1: Fn(&Node)->u64+'static, H2: Fn(&Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
+impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
 
     // produces updates for changes in the indicated relation only.
     fn relation_update<'a>(&self, relation: usize, relations: &[(usize, usize)]) -> Stream<G, (Vec<Node>, i32)> 

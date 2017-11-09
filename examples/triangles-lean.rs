@@ -47,7 +47,7 @@ fn main () {
 
             // we will index the data both by src and dst.
             // let (forward, f_handle) = dG.index_from(&dG.filter(|_| false).map(|_| (0,0)));
-            let reverse = IndexStream::from(|&k| k as u64, 
+            let reverse = IndexStream::from(|k| k as u64, 
                                             &dG.map(|((x,y),_)| (y,x)),
                                             &Vec::new().to_stream(builder));
 
@@ -58,8 +58,8 @@ fn main () {
             //                             .index_from(&dG.map(|((x,y),_)| (y,x)), |&k| k as u64);
 
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(ref y,_)| y, |t1, t2| t1.le(t2))),
-                                         Box::new(reverse.extend_using(|&(_,ref z)| z, |t1, t2| t1.le(t2)))]);
+            let cliques = dQ.extend(vec![Box::new(reverse.extend_using(|&(y,_)| y, |t1, t2| t1.le(t2))),
+                                         Box::new(reverse.extend_using(|&(_,z)| z, |t1, t2| t1.le(t2)))]);
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {
