@@ -63,6 +63,7 @@ mod compact {
         }
 
         /// Reveal the slice for `key` starting from (and updating) `key_cursor`.
+        #[inline(always)]
         pub fn values_from<'a>(&'a self, key: &K, key_cursor: &mut usize) -> &'a [V] {
 
             if *key_cursor < self.keys.len() {
@@ -195,7 +196,7 @@ mod edge_list_neu {
 
         fn consolidate_tail(&mut self) {
             let bound = self.bounds.last().map(|&x| x).unwrap_or(0);
-            self.values[bound ..].sort_unstable_by(|x,y| x.0.cmp(&y.0));
+            self.values[bound ..].sort_by(|x,y| x.0.cmp(&y.0));
 
             let mut cursor = bound;            
             for index in (bound + 1) .. self.values.len() {
@@ -222,7 +223,7 @@ mod edge_list_neu {
         /// This gives the `EdgeList` a chance to simplify its representation in response to work
         /// that is about to be done. If a great deal of work will be done, it may make sense to
         /// consolidate the edge list to simplify that work.
-        #[inline(never)]
+        #[inline(always)]
         pub fn expend(&mut self, effort: u32) {
             if self.bounds.len() > 0 {
                 self.effort += effort;
@@ -269,7 +270,7 @@ mod edge_list_neu {
             while s_cursor < source.len() && u_cursor < updates.len() {
                 match source[s_cursor].cmp(&updates[u_cursor].0) {
                     Ordering::Less => {
-                        let step = advance(&source[s_cursor..], |x| x < &updates[u_cursor].0);
+                        let step = 1 + advance(&source[(s_cursor+1)..], |x| x < &updates[u_cursor].0);
                         debug_assert!(step > 0);
                         s_cursor += step;
                     },
@@ -279,13 +280,12 @@ mod edge_list_neu {
                         u_cursor += 1;
                     },
                     Ordering::Greater => {
-                        let step = advance(&updates[u_cursor..], |x| x.0 < source[s_cursor]);
+                        let step = 1 + advance(&updates[(u_cursor+1)..], |x| x.0 < source[s_cursor]);
                         debug_assert!(step > 0);
                         u_cursor += step;
                     },
                 }
             }
-
         }
     }
 }
@@ -295,12 +295,13 @@ mod unsorted {
     use super::advance;
 
     pub struct Unsorted<K, V, T> {
-        pub updates: Vec<(K, V, T, i32)>
+        pub updates: Vec<(K, V, T, i32)>,
+        pub min_time: Option<T>,
     }
 
     impl<K: Ord, V: Ord, T: Ord+Clone> Unsorted<K, V, T> {
 
-        pub fn new() -> Self { Unsorted { updates: Vec::new() } }
+        pub fn new() -> Self { Unsorted { updates: Vec::new(), min_time: None } }
 
         pub fn values_from<'a>(&'a self, key: &K, key_cursor: &mut usize) -> &'a [(K, V, T, i32)] {
             *key_cursor += advance(&self.updates[*key_cursor ..], |x| &x.0 < key);
@@ -312,7 +313,11 @@ mod unsorted {
 
         pub fn extend<I: Iterator<Item=((K, V), i32)>>(&mut self, time: T, iterator: I) {
             self.updates.extend(iterator.map(|((k,v),d)| (k, v, time.clone(), d)));
-            self.updates.sort_unstable_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+            self.updates.sort_by(|x,y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+
+            if self.min_time == None || self.min_time.as_ref().unwrap() > &time {
+                self.min_time = Some(time);
+            }
         }
     }
 }
@@ -339,33 +344,33 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     where K:Fn(&P)->Key, Valid:Fn(&T)->bool {
 
         // sort data by key, to share work for the same key.
-        data.sort_unstable_by(|x,y| func(&x.0).cmp(&(func(&y.0))));
+        data.sort_by(|x,y| func(&x.0).cmp(&(func(&y.0))));
 
         // cursors into `self.compact` and `self.diffs`.
         let mut c_cursor = 0;
         let mut d_cursor = 0;
 
+        let possible_diffs = self.diffs.min_time.as_ref().map(|t| _valid(t)).unwrap_or(false);
+
         let mut index = 0;
         while index < data.len() {
 
             let mut count = 0u64;
-            let key_index = index;
+            let key = func(&data[index].0);
 
-            {
-                let key = func(&data[index].0);
+            // (ia) update `count` by the number of values in `self.compact`.
+            count += self.compact.values_from(&key, &mut c_cursor).len() as u64;
 
-                // (ia) update `count` by the number of values in `self.compact`.
-                count += self.compact.values_from(&key, &mut c_cursor).len() as u64;
+            // (ib) update `count` by values in `self.edges`.
+            count += self.edges.get(&key).map(|entry| entry.count() as u64).unwrap_or(0);
 
-                // (ib) update `count` by values in `self.edges`.
-                count += self.edges.get(&key).map(|entry| entry.count() as u64).unwrap_or(0);
-
-                // (ic) update `count` by values in `self.diffs`. (an over-estimate)
+            // (ic) update `count` by values in `self.diffs`. (an over-estimate)
+            if possible_diffs {
                 count += self.diffs.values_from(&key, &mut d_cursor).len() as u64;
             }
 
             // (ii) we may have multiple records with the same key, do them all.
-            while index < data.len() && func(&data[index].0) == func(&data[key_index].0) {
+            while index < data.len() && func(&data[index].0) == key {
 
                 // if the count improves, retain the count and the identifier of the index.
                 if count < data[index].1 {
@@ -402,42 +407,39 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
             // for each key, we (i) determine the proposals and then (ii) supply them to each 
             // entry of `data` with the same key.
 
-            let key_index = index;
+            let key = func(&data[index].0);
+            proposals.clear();
 
-            {
-                let key = func(&data[index].0);
-                proposals.clear();
+            // (ia): incorporate updates from `self.compact`.
+            let values = self.compact.values_from(&key, &mut offset_cursor);
+            proposals.extend(values.iter().map(|v| (v.clone(), 1)));
 
-                // (ia): incorporate updates from `self.compact`.
-                let values = self.compact.values_from(&key, &mut offset_cursor);
-                proposals.extend(values.iter().map(|v| (v.clone(), 1)));
+            // (ib): incorporate updates from `self.edges`.
+            self.edges.get_mut(&key).map(|entry| proposals.extend_from_slice(entry.proposals()));
 
-                // (ib): incorporate updates from `self.edges`.
-                self.edges.get_mut(&key).map(|entry| proposals.extend_from_slice(entry.proposals()));
-
-                // (ic): incorporate updates from `self.diffs`.
-                let values = self.diffs.values_from(&key, &mut diffs_cursor);
-                for &(ref _key, ref val, ref time, wgt) in values.iter() {
-                    if valid(time) {
-                        proposals.push((val.clone(), wgt));
-                    }
-                }
-
-                // (id): consolidate all the counts that we added in, keep positive counts.
-                if proposals.len() > 0 {
-                    proposals.sort_unstable_by(|x,y| x.0.cmp(&y.0));
-                    for cursor in 0 .. proposals.len() - 1 {
-                        if proposals[cursor].0 == proposals[cursor + 1].0 {
-                            proposals[cursor + 1].1 += proposals[cursor].1;
-                            proposals[cursor].1 = 0;
-                        }
-                    }
-                    proposals.retain(|x| x.1 > 0);
+            // (ic): incorporate updates from `self.diffs`.
+            let values = self.diffs.values_from(&key, &mut diffs_cursor);
+            for &(ref _key, ref val, ref time, wgt) in values.iter() {
+                if valid(time) {
+                    proposals.push((val.clone(), wgt));
                 }
             }
 
+            // (id): consolidate all the counts that we added in, keep positive counts.
+            if proposals.len() > 0 {
+                proposals.sort_by(|x,y| x.0.cmp(&y.0));
+                for cursor in 0 .. proposals.len() - 1 {
+                    if proposals[cursor].0 == proposals[cursor + 1].0 {
+                        proposals[cursor + 1].1 += proposals[cursor].1;
+                        proposals[cursor].1 = 0;
+                    }
+                }
+                proposals.retain(|x| x.1 > 0);
+            }
+        
+
             // (ii): we may have multiple records with the same key, propose for them all.
-            while index < data.len() && func(&data[index].0) == func(&data[key_index].0) {
+            while index < data.len() && func(&data[index].0) == key {
                 for &(ref val, cnt) in &proposals {
                     for _ in 0 .. cnt {
                         data[index].1.push(val.clone());
@@ -467,31 +469,29 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
         let mut index = 0;
         while index < data.len() {
 
-            let key_index = index;
-
-            // let key = func(&data[index].0);
+            let key = func(&data[index].0);
 
             // consider the amount of effort we are about to invest:
-            let mut effort = 0;
+            let mut effort = 16;
             let mut temp_index = index;
-            while data.get(temp_index).map(|x| func(&x.0)) == Some(func(&data[index].0)) {
+            while temp_index < data.len() && func(&data[temp_index].0) == key {
                 effort += data[temp_index].1.len();
                 temp_index += 1;
             }
 
             // (i) position `self.compact` cursor so that we can re-use it.
-            let compact_slice = self.compact.values_from(&func(&data[index].0), &mut offset_cursor);
+            let compact_slice = self.compact.values_from(&key, &mut offset_cursor);
 
             // (ii) prepare non-compact updates. if our effort level is large, consolidate. 
-            let mut entry = self.edges.get_mut(&func(&data[index].0));
+            let mut entry = self.edges.get_mut(&key);
             entry.as_mut().map(|x| x.expend(effort as u32));
 
             // (iii) position `self.diffs` cursor so that we can re-use it.
-            let diffs_slice = self.diffs.values_from(&func(&data[index].0), &mut diffs_cursor);
+            let diffs_slice = self.diffs.values_from(&key, &mut diffs_cursor);
         
 
             // we may have multiple records with the same key, do them all.
-            while index < data.len() && func(&data[index].0) == func(&data[key_index].0) {
+            while index < data.len() && func(&data[index].0) == key {
 
                 // in this context, we only worry about the proposals of the record.
                 let proposals = &mut data[index].1;
@@ -579,6 +579,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
 
         // remove committed updates
         self.diffs.updates.retain(|x| x.3 != 0);
+        self.diffs.min_time = self.diffs.updates.iter().map(|x| x.2.clone()).min();
     }
 
     /// Introduces a collection of updates at various times.

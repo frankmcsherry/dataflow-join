@@ -99,12 +99,12 @@ trait IndexNode {
 }
 
 impl IndexNode for Vec<Node> {
-    fn index(&self, index: usize) -> Node { self[index] }
+    #[inline(always)] fn index(&self, index: usize) -> Node { self[index] }
 }
-impl IndexNode for [Node; 2] { fn index(&self, index: usize) -> Node { self[index] } }
-impl IndexNode for [Node; 3] { fn index(&self, index: usize) -> Node { self[index] } }
-impl IndexNode for [Node; 4] { fn index(&self, index: usize) -> Node { self[index] } }
-impl IndexNode for [Node; 5] { fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 2] { #[inline(always)] fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 3] { #[inline(always)] fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 4] { #[inline(always)] fn index(&self, index: usize) -> Node { self[index] } }
+impl IndexNode for [Node; 5] { #[inline(always)] fn index(&self, index: usize) -> Node { self[index] } }
 
 impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStreamIndex<G, H1, H2> where G::Timestamp: Ord+::std::hash::Hash {
 
@@ -149,6 +149,7 @@ impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStream
             (new_vec, w)
         })
     }
+
     /// Extends an indexable prefix, using a plan described by several (attr, is_forward, is_prior) cues.
     fn extend_attribute<'a, P>(&self, stream: &Stream<G, (P, i32)>, plan: &[(usize, bool, bool)]) -> Stream<G, (P, Vec<u32>, i32)> 
         where G: 'a,

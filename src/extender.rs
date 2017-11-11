@@ -173,7 +173,7 @@ where
         let valid = self.valid.clone();
 
         let handle = self.handle.clone();
-        let mut blocked = vec![];
+        let mut blocked = HashMap::new();//vec![];
 
         let exch = Exchange::new(move |&(ref x,_,_,_)| (*hash)((*logic1)(x)));
 
@@ -187,25 +187,21 @@ where
             // The same structure also applies to `propose` and `intersect`, so these comments apply too.
 
             // put all (time, data) pairs into a temporary list 
-            input.for_each(|time, data| blocked.push((time, data.take())));
+            input.for_each(|time, data| blocked.entry(time).or_insert(Vec::new()).extend(data.drain(..)));
 
             // scan each stashed element and see if it is time to process it.
-    		for &mut (ref time, ref mut data) in &mut blocked {
-
+           for (time, data) in blocked.iter_mut() {
                 // ok to process if no further updates less or equal to `time`.
                 if !handle.less_equal(time.time()) {
-
                     // pop the data out of the list; we'll clean up the entry later.
-                    let mut data = data.take();
-                    (*index).borrow_mut().count(&mut data, &*logic2, &|t| (*valid)(t, time), ident);
-                    data.retain(|x| x.1 > 0);
-                    output.session(time).give_content(&mut data);
-    			}
-    		}
+                    (*index).borrow_mut().count(data, &*logic2, &|t| (*valid)(t, time.time()), ident);
+                    output.session(time).give_iterator(data.drain(..).filter(|x| x.1 > 0));
+                }
+            }
 
             // discard any data we processed up above.
-            blocked.retain(|&(_, ref data)| data.len() > 0);
-    	})
+            blocked.retain(|_, data| data.len() > 0);
+        })
     }
 
     fn propose(&self, stream: Stream<G, (Self::Prefix, i32)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)> {
@@ -219,32 +215,33 @@ where
 
         let index = self.index.clone();
 
-        let mut blocked = vec![];
+        let mut blocked = HashMap::new();//vec![];
 
         stream.unary_stream(exch, "Propose", move |input, output| {
 
-            input.for_each(|time, data| blocked.push((time, data.take())));
+            input.for_each(|time, data|
+                blocked
+                    .entry(time)
+                    .or_insert(Vec::new())
+                    .extend(data.drain(..).map(|(p,s)| (p,vec![],s)))
+            );
 
-            let mut todo = Vec::new();
+            // scan each stashed element and see if it is time to process it.
+            for (time, data) in blocked.iter_mut() {
 
-            for &mut (ref time, ref mut data) in &mut blocked {
+                // ok to process if no further updates less or equal to `time`.
                 if !handle.less_equal(time.time()) {
-                    let mut data = data.take();
-                    todo.extend(data.drain(..).map(|(p,s)| (p,vec![],s)));
-                }
-            }
-
-            if todo.len() > 0 {
-                (*index).borrow_mut().propose(&mut todo, &*logic2, &|t| (*valid)(t, &blocked[0].0.time()));
-                let mut session = output.session(&blocked[0].0);
-                for x in todo.drain(..) { 
-                    if x.1.len() > 0 {
-                        session.give(x); 
+                    (*index).borrow_mut().propose(data, &*logic2, &|t| (*valid)(t, time.time()));
+                    let mut session = output.session(&time);
+                    for x in data.drain(..) { 
+                        if x.1.len() > 0 {
+                            session.give(x); 
+                        }
                     }
                 }
             }
 
-            blocked.retain(|&(_, ref data)| data.len() > 0);
+            blocked.retain(|_, data| data.len() > 0);
     	})
     }
 
@@ -257,40 +254,26 @@ where
         let index = self.index.clone();
         let handle = self.handle.clone();
 
-        let mut blocked = Vec::new();
+        let mut blocked = HashMap::new();
         let exch = Exchange::new(move |&(ref x,_,_)| (*hash)((*logic1)(x)));
 
         stream.unary_stream(exch, "Intersect", move |input, output| {
     
-            input.for_each(|time, data| blocked.push((time, data.take())));
+            input.for_each(|time, data| blocked.entry(time).or_insert(Vec::new()).extend(data.drain(..)));
 
-            for &mut (ref time, ref mut data) in &mut blocked {
+            for (time, data) in blocked.iter_mut() {
+
+                // ok to process if no further updates less or equal to `time`.
                 if !handle.less_equal(time.time()) {
-                    let mut data = data.take();
-                    (*index).borrow_mut().intersect(&mut data, &*logic2, &|t| (*valid)(t, time.time()));
+                    (*index).borrow_mut().intersect(data, &*logic2, &|t| (*valid)(t, time.time()));
                     output.session(&time).give_iterator(data.drain(..));
                 }
             }
 
-            blocked.retain(|&(_, ref data)| data.len() > 0);
+            blocked.retain(|_, data| data.len() > 0);
         })
     }
 }
-
-// /// Arranges something as an `IndexStream`.
-// pub trait Indexable<G: Scope, K: Ord+Hash+Clone, V: Ord+Clone> where G::Timestamp : Ord {
-//     /// Returns an `IndexStream` and a handle through which the index may be mutated.
-//     fn index_from<H: Fn(&K)->u64+'static>(&self, initially: &Stream<G, (K, V)>, hash: H) -> (IndexStream<K, V, H, G::Timestamp>, Rc<RefCell<Index<K, V, G::Timestamp>>>); 
-// }
-
-// impl<G: Scope, K: Ord+Hash+Clone+ExchangeData, V: Ord+Clone+ExchangeData> Indexable<G, K, V> for Stream<G, ((K, V), i32)> where G::Timestamp: ::std::hash::Hash+Ord+Clone {
-//     // returns a container for the streams and indices, as well as handles to the two indices.
-//     fn index_from<H: Fn(&K)->u64+'static>(&self, initially: &Stream<G, (K, V)>, hash: H) -> (IndexStream<K, V, H, G::Timestamp>, Rc<RefCell<Index<K, V, G::Timestamp>>>) { 
-//         let index_stream = IndexStream::from(hash, initially, self);
-//         let index = index_stream.index.clone();
-//         (index_stream, index)
-//     }
-// }
 
 
 mod merge_sorter {
