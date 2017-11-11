@@ -64,18 +64,18 @@ fn main () {
             let reverse = IndexStream::from(|(a,b)| (a + b) as u64, &Vec::new().to_stream(builder), &dT.map(|((a,b,c),wgt)| (((a,c),b),wgt)));
 
             // dK4dA(w,x,y,z) := dA(w,x,y), B(w,x,z), C(w,y,z)
-            let dK4dA = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_y)| (w,x), <_ as PartialOrd>::lt)),
-                                       Box::new(forward.extend_using(|&(w,_x,y)| (w,y), <_ as PartialOrd>::lt))])
+            let dK4dA = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_y)| (w,x), <_ as PartialOrd>::le)),
+                                       Box::new(forward.extend_using(|&(w,_x,y)| (w,y), <_ as PartialOrd>::le))])
                           .flat_map(|((w,x,y), zs, wgt)| zs.into_iter().map(move |z| ((w,x,y,z),wgt)));
 
             // dK4dB(w,x,y,z) := dB(w,x,z), A(w,x,y), C(w,y,z)
-            let dK4dB = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_z)| (w,x), <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(w,_x,z)| (w,z), <_ as PartialOrd>::lt))])
+            let dK4dB = dT.extend(vec![Box::new(forward.extend_using(|&(w,x,_z)| (w,x), <_ as PartialOrd>::lt)),
+                                       Box::new(reverse.extend_using(|&(w,_x,z)| (w,z), <_ as PartialOrd>::le))])
                           .flat_map(|((w,x,z), ys, wgt)| ys.into_iter().map(move |y| ((w,x,y,z),wgt)));
 
             // dK4dC(w,x,y,z) := dC(w,y,z), A(w,x,y), B(w,x,z)
-            let dK4dC = dT.extend(vec![Box::new(reverse.extend_using(|&(w,y,_z)| (w,y), <_ as PartialOrd>::le)),
-                                       Box::new(reverse.extend_using(|&(w,_y,z)| (w,z), <_ as PartialOrd>::le))])
+            let dK4dC = dT.extend(vec![Box::new(reverse.extend_using(|&(w,y,_z)| (w,y), <_ as PartialOrd>::lt)),
+                                       Box::new(reverse.extend_using(|&(w,_y,z)| (w,z), <_ as PartialOrd>::lt))])
                           .flat_map(|((w,y,z), xs, wgt)| xs.into_iter().map(move |x| ((w,x,y,z),wgt)));
 
             let dK4 = dK4dA.concat(&dK4dB).concat(&dK4dC);
