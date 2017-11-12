@@ -150,7 +150,7 @@ where
     phantom: PhantomData<P>,
 }
 
-impl<K, V, G, P, L, H, F> StreamPrefixExtender<G> for Rc<IndexExtender<K, V, G::Timestamp, P, L, H, F>> 
+impl<K, V, G, P, L, H, F, W> StreamPrefixExtender<G, W> for Rc<IndexExtender<K, V, G::Timestamp, P, L, H, F>> 
 where 
     K: Ord+Hash+Clone+ExchangeData,
     V: Ord+Clone+ExchangeData,
@@ -159,12 +159,13 @@ where
     P: ExchangeData+Debug,
     L: Fn(&P)->K+'static,
     H: Fn(K)->u64+'static,
-    F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static 
+    F: Fn(&G::Timestamp, &G::Timestamp)->bool+'static,
+    W: ExchangeData,
 {
     type Prefix = P;
     type Extension = V;
 
-    fn count(&self, prefixes: Stream<G, (Self::Prefix, u64, u64, i32)>, ident: u64) -> Stream<G, (Self::Prefix, u64, u64, i32)> {
+    fn count(&self, prefixes: Stream<G, (Self::Prefix, u64, u64, W)>, ident: u64) -> Stream<G, (Self::Prefix, u64, u64, W)> {
         
         let hash = self.hash.clone();
         let index = self.index.clone();
@@ -204,7 +205,7 @@ where
         })
     }
 
-    fn propose(&self, stream: Stream<G, (Self::Prefix, i32)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)> {
+    fn propose(&self, stream: Stream<G, (Self::Prefix, W)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, W)> {
 
         let hash = self.hash.clone();
         let logic1 = self.logic.clone();
@@ -245,7 +246,7 @@ where
     	})
     }
 
-    fn intersect(&self, stream: Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, i32)> {
+    fn intersect(&self, stream: Stream<G, (Self::Prefix, Vec<Self::Extension>, W)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>, W)> {
 
         let hash = self.hash.clone();
         let logic1 = self.logic.clone();

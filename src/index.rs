@@ -340,7 +340,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
     /// happens if the counts proposed here would be smaller than what is currently recorded in the
     /// tuple.
     #[inline(never)]
-    pub fn count<P,K,Valid>(&mut self, data: &mut Vec<(P, u64, u64, i32)>, func: &K, _valid: &Valid, ident: u64) 
+    pub fn count<P,K,Valid,W>(&mut self, data: &mut Vec<(P, u64, u64, W)>, func: &K, _valid: &Valid, ident: u64) 
     where K:Fn(&P)->Key, Valid:Fn(&T)->bool {
 
         // sort data by key, to share work for the same key.
@@ -385,7 +385,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
 
     /// Proposes extensions for prefixes based on the index.
     #[inline(never)]
-    pub fn propose<P, K, Valid>(&mut self, data: &mut Vec<(P, Vec<Val>, i32)>, func: &K, valid: &Valid) 
+    pub fn propose<P, K, Valid,W>(&mut self, data: &mut Vec<(P, Vec<Val>, W)>, func: &K, valid: &Valid) 
     where K:Fn(&P)->Key, Valid:Fn(&T)->bool {
 
         // sorting allows us to re-use computation for the same key, and simplifies the searching 
@@ -452,7 +452,7 @@ impl<Key: Ord+Hash+Clone, Val: Ord+Clone, T: Ord+Clone> Index<Key, Val, T> {
 
     /// Restricts extensions for prefixes to those found in the index.
     #[inline(never)]
-    pub fn intersect<P, F, Valid>(&mut self, data: &mut Vec<(P, Vec<Val>, i32)>, func: &F, valid: &Valid) 
+    pub fn intersect<P, F, Valid, W>(&mut self, data: &mut Vec<(P, Vec<Val>, W)>, func: &F, valid: &Valid) 
     where F: Fn(&P)->Key, Valid: Fn(&T)->bool {
 
         // sorting data by key allows us to re-use some work / compact representations.

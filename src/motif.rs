@@ -154,7 +154,7 @@ impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStream
     fn extend_attribute<'a, P>(&self, stream: &Stream<G, (P, i32)>, plan: &[(usize, bool, bool)]) -> Stream<G, (P, Vec<u32>, i32)> 
         where G: 'a,
               P: ::std::fmt::Debug+ExchangeData+IndexNode {
-        let mut extenders: Vec<Box<StreamPrefixExtender<G, Prefix=P, Extension=Node>+'a>> = vec![];
+        let mut extenders: Vec<Box<StreamPrefixExtender<G, i32, Prefix=P, Extension=Node>+'a>> = vec![];
         for &(attribute, is_forward, prior) in plan {
             extenders.push(match (is_forward, prior) {
                 (true, true)    => Box::new(self.forward.extend_using(move |x: &P| x.index(attribute), <_ as PartialOrd>::le)),

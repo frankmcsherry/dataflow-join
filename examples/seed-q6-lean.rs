@@ -31,7 +31,7 @@ fn main () {
             let (graph, dT) = builder.new_input::<((u32, u32, u32), i32)>();
 
             // A stream of changes to the set of *triangles*, where a < b < c.
-            let (query, dQ) = builder.new_input::<((u32, u32, u32), i32)>();
+            let (query, dQ) = builder.new_input::<((u32, u32, u32), ())>();
 
             // Our query is K4(w,x,y,z) := T(w,x,y), T(w,x,z), T(w,y,z), T(x,y,z)
             //
@@ -65,21 +65,24 @@ fn main () {
             );
 
             // we bind dQ as (v2, v5, v3), exploiting the fact that we have bound each 
-            let dK4dA = dQ.extend(vec![Box::new(forward.extend_using(|&(v2,v5,_v3)| (v2,v5), <_ as PartialOrd>::le)),
-                                       Box::new(forward.extend_using(|&(v2,_v5,v3)| (v2,v3), <_ as PartialOrd>::le))])
-                          .map(|((v2,v5,v3), v4s, w)| ((v2,v3,v4s,v5),w))
-                          .extend(vec![Box::new(forward.extend_using(|&(v2,_,_,v5)| (v2,v5), <_ as PartialOrd>::le))])
+            let dK4dA = dQ.extend(vec![Box::new(forward.extend_using(|&(v2,v5,_v3)| min_max(v2,v5), <_ as PartialOrd>::le)),
+                                       Box::new(forward.extend_using(|&(v2,_v5,v3)| min_max(v2,v3), <_ as PartialOrd>::le))])
+                          .map(|((v2,v5,v3), mut v4s, w)| {
+                                v4s.retain(|&v4| v2 != v4 && v3 < v4);
+                                ((v2,v3,v4s,v5),w)
+                            })
+                          .extend(vec![Box::new(forward.extend_using(|&(v2,_,_,v5)| min_max(v2,v5), <_ as PartialOrd>::le))])
                           .map(|((v2,v3,v4s,v5), v1s, w)| ((v1s,v2,v3,v4s,v5),w));
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {
                 dK4dA.inspect_batch(move |_,x| {
                     let mut sum = 0;
-                    for &((ref v1s, v2, v3, ref v4s, _v5),_) in x.iter() {
+                    for &((ref v1s, _v2, v3, ref v4s, _v5),_) in x.iter() {
                         for &v1 in v1s.iter() {
                             if v1 != v3 {
                                 for &v4 in v4s.iter() {
-                                    if v1 != v4 && v2 != v4 && v3 < v4 {
+                                    if v1 != v4 {
                                         sum += 1;
                                     }
                                 }
@@ -120,9 +123,6 @@ fn main () {
             input.send(((a,b,c), 1));
             input.send(((a,c,b), 1));
             input.send(((b,c,a), 1));
-            input.send(((b,a,c), 1));
-            input.send(((c,a,b), 1));
-            input.send(((c,b,a), 1));
         }
 
         // synchronize with other workers.
@@ -144,10 +144,9 @@ fn main () {
             node += batch as u32;
             while sent < triangles.len() && triangles[sent].0 < node {
                 let (a,b,c) = triangles[sent];
-                query.send(((a,b,c), 1));
-                query.send(((a,c,b), 1));
-                query.send(((b,c,a), 1));
-                // query.send((triangles[sent], 1));
+                query.send(((a,b,c), ()));
+                query.send(((a,c,b), ()));
+                query.send(((b,c,a), ()));
                 sent += 1;
             }
 
@@ -179,6 +178,9 @@ fn main () {
     }
 }
 
+fn min_max<T: Ord>(a: T, b: T) -> (T, T) {
+    if a < b { (a, b) } else { (b, a) }
+}
 
 fn intersect_and<F: FnMut(u32)>(aaa: &[u32], mut bbb: &[u32], mut func: F) {
 

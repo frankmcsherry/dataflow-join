@@ -31,7 +31,7 @@ fn main () {
             let (graph, dT) = builder.new_input::<((u32, u32, u32), i32)>();
 
             // A stream of changes to the set of *triangles*, where a < b < c.
-            let (query, dQ) = builder.new_input::<((u32, u32, u32), i32)>();
+            let (query, dQ) = builder.new_input::<((u32, u32, u32), ())>();
 
             // Our query is K4(w,x,y,z) := T(w,x,y), T(w,x,z), T(w,y,z), T(x,y,z)
             //
@@ -122,7 +122,7 @@ fn main () {
         while sent < triangles.len() {
             node += batch as u32;
             while sent < triangles.len() && triangles[sent].0 < node {
-                query.send((triangles[sent], 1));
+                query.send((triangles[sent], ()));
                 sent += 1;
             }
 
