@@ -83,6 +83,25 @@ impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStream
         (index, handles)
     }
 
+        /// Constructs a new graph stream index from initial edges and an update stream.
+    pub fn from_separately_static(initially_f: Stream<G, Edge>, initially_r: Stream<G, Edge>, 
+                queries: Stream<G, (Edge, i32)>, hash1: H1, hash2: H2) -> (Self, GraphStreamIndexHandle<G::Timestamp>) {
+
+        let forward = IndexStream::from(hash1, &initially_f, &Vec::new().to_stream(&mut initially_f.scope()));
+        let reverse = IndexStream::from(hash2, &initially_r.map(|(src,dst)| (dst,src)),
+                                               &Vec::new().to_stream(&mut initially_r.scope()));
+        let index = GraphStreamIndex {
+            updates: queries,
+            forward: forward,
+            reverse: reverse,
+        };
+        let handles = GraphStreamIndexHandle {
+            forward: index.forward.index.clone(),
+            reverse: index.reverse.index.clone(),
+        };
+        (index, handles)
+    }
+
     /// Constructs a dataflow subgraph to track a described motif.
     pub fn track_motif<'a>(&self, description: &[(usize, usize)]) -> Stream<G, (Vec<Node>, i32)> where G: 'a {
         let mut result = self.updates.filter(|_| false).map(|_| (Vec::new(), 0));
@@ -90,6 +109,10 @@ impl<G: Scope, H1: Fn(Node)->u64+'static, H2: Fn(Node)->u64+'static> GraphStream
             result = result.concat(&self.relation_update(relation, &description));
         }
         result
+    }
+    /// Constructs a dataflow subgraph to track a described motif.
+    pub fn build_motif<'a>(&self, description: &[(usize, usize)]) -> Stream<G, (Vec<Node>, i32)> where G: 'a {
+        self.relation_update(0, &description)
     }
 }
 
