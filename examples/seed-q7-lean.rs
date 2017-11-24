@@ -74,7 +74,7 @@ fn main () {
             // if the third argument is "inspect", report triangle counts.
             if inspect {
                 dQ7dA.inspect_batch(move |_,x| {
-                    let sum = x.iter().map(|xx| xx.1.len()).sum();
+                    let sum: usize = x.iter().map(|xx| xx.1.len()).sum();
                     if let Ok(mut bound) = send.lock() {
                         *bound += sum;
                     }

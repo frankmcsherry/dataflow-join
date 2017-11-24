@@ -71,7 +71,7 @@ fn main () {
             // if the third argument is "inspect", report triangle counts.
             if inspect {
                 dK4dA.inspect_batch(move |_,x| {
-                    let sum = x.iter().map(|xx| xx.1.len()).sum();
+                    let sum = x.iter().map(|xx| xx.1.len()).sum::<usize>();
                     if let Ok(mut bound) = send.lock() {
                         *bound += sum;
                     }
