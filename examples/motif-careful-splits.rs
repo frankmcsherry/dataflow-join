@@ -306,7 +306,6 @@ fn main () {
         root.step_while(|| probe.less_than(input_delta.time()));
         println!("{:?}\t[worker {}]\tindices merged", start.elapsed(), index);
 
-
         let lines = match File::open(&Path::new(&query_filename)) {
             Ok(file) => BufReader::new(file).lines(),
             Err(why) => {
@@ -316,8 +315,10 @@ fn main () {
             },
         };
 
+        let mut batch = Vec::new();     // current accumulated batch.
+        let mut batches = Vec::new();   // all batches listed out.
 
-        // issue queries and updates, using the remaining lines in the file.
+        // parse, filter queries this worker will introduce.
         for (query_counter, line) in lines.enumerate() {
 
             // each worker is responsible for a fraction of the queries
@@ -327,19 +328,40 @@ fn main () {
                     let mut elements = good_line[..].split_whitespace();
                     let src: Node = elements.next().unwrap().parse().ok().expect("malformed src");
                     let dst: Node = elements.next().unwrap().parse().ok().expect("malformed dst");
-                    input_delta.send(((src, dst), 1));
+                    // input_delta.send(((src, dst), 1));
+                    batch.push((src, dst));
                 }
             }
 
             // synchronize and merge indices.
             if query_counter % query_batch == (query_batch - 1) {
-                let prev_time = input_delta.time().clone();
-                // input_graph.advance_to(prev_time.inner + 1);
-                input_delta.advance_to(prev_time.inner + 1);
-                root.step_while(|| probe.less_than(input_delta.time()));
-                handles.merge_to(&prev_time);
+                batches.push(batch);
+                batch = Vec::new();
             }
         }
+        if batch.len() > 0 { batches.push(batch); }
+
+        let prev_time = input_delta.time().clone();
+        input_delta.advance_to(prev_time.inner + 1);
+        root.step_while(|| probe.less_than(input_delta.time()));
+        println!("{:?}\t[worker {}]\tquery input batches parsed (number: {}).", start.elapsed(), index, batches.len());
+
+        for round in 0 .. batches.len() {
+
+            for (src, dst) in batches[round].drain(..) {
+                input_delta.send(((src, dst), 1));
+            }
+
+            let prev_time = input_delta.time().clone();
+            input_delta.advance_to(prev_time.inner + 1);
+            root.step_while(|| probe.less_than(input_delta.time()));
+            handles.merge_to(&prev_time);
+            println!("{:?}\t[worker {}]\tquery input batch {} complete.", start.elapsed(), index, round);
+
+        }
+
+        println!("{:?}\t[worker {}]\tall query batches complete.", start.elapsed(), index);
+
     }).unwrap();
 
     let total = send2.lock().map(|x| *x).unwrap_or(0);
