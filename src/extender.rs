@@ -70,6 +70,8 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
     {
         use self::merge_sorter::MergeSorter;
 
+        let worker_index = initially.scope().index();
+
         let index_1 = Rc::new(RefCell::new(Index::new()));  // held by operator
         let index_2 = index_1.clone();                      // returned in `IndexStream`.
 
@@ -78,7 +80,7 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
         let hash_3 = hash_1.clone();    // returned in `IndexStream`.
 
         let mut map = HashMap::new();
-        let mut sorter = Some(MergeSorter::new());
+        let mut sorter = Some(MergeSorter::new(|x: &(K,V)| x.clone()));
 
         let exch1 = Exchange::new(move |x: &((K,V),i32)| (*hash_1)((x.0).0.clone()));
         let exch2 = Exchange::new(move |x: &(K,V)| (*hash_2)(x.0.clone()));
@@ -107,6 +109,8 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
                     if let Some(mut sorter) = sorter.take() {
                         let mut sorted = Vec::new();
                         sorter.finish_into(&mut sorted);
+                        let sum: usize = sorted.iter().map(|x| x.len()).sum();
+                        println!("worker {}: index built with {} elements", worker_index, sum);
                         index_1.borrow_mut().initialize(&mut sorted);
                     }
                     // push updates if updates exist
@@ -341,15 +345,17 @@ mod merge_sorter {
         vec.set_len(len + 1);
     }
 
-    pub struct MergeSorter<D: Ord> {
+    pub struct MergeSorter<D, K: Ord, F: Fn(&D)->K> {
         queue: Vec<Vec<Vec<D>>>,    // each power-of-two length list of allocations.
         stash: Vec<Vec<D>>,
+        logic: F,
+        phant: ::std::marker::PhantomData<K>,
     }
 
-    impl<D: Ord> MergeSorter<D> {
+    impl<D, K: Ord, F: Fn(&D)->K> MergeSorter<D, K, F> {
 
         #[inline]
-        pub fn new() -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new() } }
+        pub fn new(logic: F) -> Self { MergeSorter { queue: Vec::new(), stash: Vec::new(), logic: logic, phant: ::std::marker::PhantomData } }
 
         #[inline]
         pub fn _empty(&mut self) -> Vec<D> {
@@ -375,7 +381,7 @@ mod merge_sorter {
             };
             
             if batch.len() > 0 {
-                batch.sort_unstable();
+                batch.sort_unstable_by(|x,y| (self.logic)(x).cmp(&(self.logic)(y)));
                 self.queue.push(vec![batch]);
                 while self.queue.len() > 1 && (self.queue[self.queue.len()-1].len() >= self.queue[self.queue.len()-2].len() / 2) {
                     let list1 = self.queue.pop().unwrap();
@@ -438,7 +444,7 @@ mod merge_sorter {
                     //     let y = head2.peek();
                     //     x.cmp(&y) 
                     // };
-                    if head1.peek() < head2.peek() {
+                    if (self.logic)(head1.peek()) < (self.logic)(head2.peek()) {
                         unsafe { push_unchecked(&mut result, head1.pop()); }
                     }
                     else {
