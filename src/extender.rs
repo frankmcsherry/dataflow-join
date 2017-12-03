@@ -228,7 +228,8 @@ where
                 blocked
                     .entry(time)
                     .or_insert(Vec::new())
-                    .extend(data.drain(..).map(|(p,s)| (p,vec![],s)))
+                    // .extend(data.drain(..).map(|(p,s)| (p,vec![],s)))
+                    .push(::std::mem::replace(data.deref_mut(), Vec::new()))
             );
 
             // scan each stashed element and see if it is time to process it.
@@ -236,11 +237,14 @@ where
 
                 // ok to process if no further updates less or equal to `time`.
                 if !handle.less_equal(time.time()) {
-                    (*index).borrow_mut().propose(data, &*logic2, &|t| (*valid)(t, time.time()));
-                    let mut session = output.session(&time);
-                    for x in data.drain(..) { 
-                        if x.1.len() > 0 {
-                            session.give(x); 
+                    if let Some(mut list) = data.pop() {
+                        let mut data = list.drain(..).map(|(p,s)| (p,vec![],s)).collect::<Vec<_>>();
+                        (*index).borrow_mut().propose(&mut data, &*logic2, &|t| (*valid)(t, time.time()));
+                        let mut session = output.session(&time);
+                        for x in data.drain(..) { 
+                            if x.1.len() > 0 {
+                                session.give(x); 
+                            }
                         }
                     }
                 }
