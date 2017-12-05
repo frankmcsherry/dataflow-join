@@ -29,7 +29,7 @@ fn main () {
         let peers = root.peers();
 
         // handles to input and probe, but also both indices so we can compact them.
-        let (mut input, mut query, probe, /*forward,*/ reverse) = root.dataflow::<u32,_,_>(|builder| {
+        let (mut input, mut query, probe, forward) = root.dataflow::<u32,_,_>(|builder| {
 
             // Please see triangles for more information on "graph" and dG.
             let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
@@ -51,26 +51,39 @@ fn main () {
                                             &dG.map(|((x,y),_)| (x,y)),
                                             &Vec::new().to_stream(builder));
 
-            // let r_handle = reverse.index.clone()
-
-            // let (reverse, r_handle) = dG.filter(|_|false)
-            //                             .map(|((src,dst),wgt)| ((dst,src),wgt))
-            //                             .index_from(&dG.map(|((x,y),_)| (y,x)), |&k| k as u64);
-
             // dC(y,z) extends to x first through A(x,y) then B(x,z), both using reverse indices.
-            let cliques = dQ.extend(vec![Box::new(forward.extend_using(|&(v1,_)| v1, |t1, t2| t1.le(t2))),
-                                         Box::new(forward.extend_using(|&(_,v2)| v2, |t1, t2| t1.le(t2)))])
-                            .flat_map(|((v1,v2),v3s,w)| v3s.into_iter().map(move |v3| ((v1,v2,v3),w)))
-                            .extend(vec![Box::new(forward.extend_using(|&(v1,_,_)| v1, |t1, t2| t1.le(t2))),
-                                         Box::new(forward.extend_using(|&(_,v2,_)| v2, |t1, t2| t1.le(t2))),
-                                         Box::new(forward.extend_using(|&(_,_,v3)| v3, |t1, t2| t1.le(t2)))])
+            let cliques = dQ.extend(vec![Box::new(forward.extend_using(|&(v2,_)| v2, |t1, t2| t1.le(t2))),
+                                         Box::new(forward.extend_using(|&(_,v5)| v5, |t1, t2| t1.le(t2)))])
+                            .flat_map(|((v2,v5),v3s,w)| v3s.into_iter().map(move |v3| ((v2,v3,v5),w)))
+                            .extend(vec![Box::new(forward.extend_using(|&(v2,_,_)| v2, |t1, t2| t1.le(t2))),
+                                         Box::new(forward.extend_using(|&(_,v3,_)| v3, |t1, t2| t1.le(t2))),
+                                         Box::new(forward.extend_using(|&(_,_,v5)| v5, |t1, t2| t1.le(t2)))])
+                            .map(|((v2,v3,v5), mut v4s, w)| {
+                                v4s.retain(|&v4| v2 != v4 && v3 < v4);
+                                ((v2,v3,v4s,v5),w)
+                            })
+                            .extend(vec![Box::new(forward.extend_using(|&(v1,_,_,_)| v1, |t1, t2| t1.le(t2))),
+                                         Box::new(forward.extend_using(|&(_,_,_,v5)| v5, |t1, t2| t1.le(t2)))])
+                            .map(|((v2,v3,v4s,v5), v1s, w)| ((v1s,v2,v3,v4s,v5),w))
                             ;
 
             // if the third argument is "inspect", report triangle counts.
             if inspect {
                 cliques
                     .inspect_batch(move |_,x| { 
-                        let sum = x.iter().map(|xx| xx.1.len()).sum::<usize>();
+                        let mut sum = 0;
+                        for &((ref v1s, _v2, v3, ref v4s, _v5),_) in x.iter() {
+                            for &v1 in v1s.iter() {
+                                if v1 != v3 {
+                                    for &v4 in v4s.iter() {
+                                        if v1 != v4 {
+                                            sum += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if let Ok(mut bound) = send.lock() {
                             *bound += sum;
                         }
@@ -113,6 +126,7 @@ fn main () {
             if node % peers == index {
                 for &edge in &edges[node / peers] {
                     input.send(((node as u32, edge), 1));
+                    input.send(((edge, node as u32), 1));
                 }
             }
         }
@@ -121,7 +135,7 @@ fn main () {
         input.advance_to(prev.inner + 1);
         query.advance_to(prev.inner + 1);
         root.step_while(|| probe.less_than(query.time()));
-        reverse.index.borrow_mut().merge_to(&prev);
+        forward.index.borrow_mut().merge_to(&prev);
         input.close();
 
         println!("{:?}: index built", start.elapsed());
@@ -142,8 +156,7 @@ fn main () {
                 root.step_while(|| probe.less_than(query.time()));
 
                 // merge all of the indices we maintain.
-                // forward.borrow_mut().merge_to(&prev);
-                reverse.index.borrow_mut().merge_to(&prev);
+                forward.index.borrow_mut().merge_to(&prev);
             }
         }
 

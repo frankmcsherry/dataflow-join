@@ -15,7 +15,7 @@ fn main () {
 
     let start = ::std::time::Instant::now();
 
-    let send = Arc::new(Mutex::new(0));
+    let send = Arc::new(Mutex::new(0usize));
     let send2 = send.clone();
 
     let inspect = ::std::env::args().find(|x| x == "inspect").is_some();
@@ -34,7 +34,7 @@ fn main () {
             // Please see triangles for more information on "graph" and dG.
             let (graph, dG) = builder.new_input::<((u32, u32), i32)>();
             // Please see triangles for more information on "graph" and dG.
-            let (query, dQ) = builder.new_input::<((u32, u32), i32)>();
+            let (query, dQ) = builder.new_input::<((u32, u32), ())>();
 
             // Our query is K3 = A(x,y) B(x,z) C(y,z): triangles.
             //
@@ -136,7 +136,7 @@ fn main () {
             // introduce the node if it is this worker's responsibility
             if node % peers == index {
                 for &edge in &edges[node / peers] {
-                    query.send(((node as u32, edge), 1));
+                    query.send(((node as u32, edge), ()));
                 }
             }
 
