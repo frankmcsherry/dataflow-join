@@ -232,12 +232,18 @@ where
                     .push(::std::mem::replace(data.deref_mut(), Vec::new()))
             );
 
+
             // scan each stashed element and see if it is time to process it.
             for (time, data) in blocked.iter_mut() {
 
                 // ok to process if no further updates less or equal to `time`.
                 if !handle.less_equal(time.time()) {
-                    if let Some(mut list) = data.pop() {
+
+                    let mut effort = 4096;
+                    while data.len() > 0 && effort > 0 {
+                        let mut list = data.pop().unwrap();
+                        effort = if list.len() > effort { 0 } else { effort - list.len() };
+
                         let mut data = list.drain(..).map(|(p,s)| (p,vec![],s)).collect::<Vec<_>>();
                         (*index).borrow_mut().propose(&mut data, &*logic2, &|t| (*valid)(t, time.time()));
                         let mut session = output.session(&time);
