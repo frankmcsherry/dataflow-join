@@ -38,6 +38,7 @@ fn main () {
 
             // quadrangles?
             let cliques = cliques.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
+                                 .filter(|&((_,b),c)| b < c)
                                  .extend(vec![&graph.extend_using(|&((_,b),_)| b as u64),
                                               &graph.extend_using(|&((_,_),c)| c as u64)]);
 
