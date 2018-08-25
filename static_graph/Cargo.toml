@@ -1,11 +1,11 @@
-_[package]
+[package]
 
 name = "dataflow-join"
 version = "0.0.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies.timely]
-git="http://github.com/frankmcsherry/timely-dataflow"
+git="https://github.com/frankmcsherry/timely-dataflow"
 branch = "dataplane_mockup"
 
 [dependencies]
