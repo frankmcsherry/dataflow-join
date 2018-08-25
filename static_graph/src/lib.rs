@@ -103,8 +103,7 @@ where PE::Prefix: Data,
         let exch = Exchange::new(move |x| (*logic)(x));
         let mut vector = Vec::new();
         stream.unary(exch, "Propose", move |_,_| move |input, output| {
-            // while
-            if let Some((time, data)) = input.next() {
+            while let Some((time, data)) = input.next() {
                 data.swap(&mut vector);
                 output.session(&time).give_iterator(vector.drain(..).map(|p| {
                     let mut vec = Vec::new();
