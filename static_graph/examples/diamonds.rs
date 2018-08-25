@@ -1,5 +1,4 @@
-
-// extern crate mmap;
+extern crate core_affinity;
 extern crate time;
 extern crate timely;
 extern crate dataflow_join;
@@ -22,6 +21,9 @@ fn main () {
 
         let index = root.index();
         let peers = root.peers();
+
+        let core_ids = core_affinity::get_core_ids().unwrap();
+        core_affinity::set_for_current(core_ids[index % core_ids.len()]);
 
         let graph = Rc::new(GraphMMap::<u32>::new(&filename));
 
