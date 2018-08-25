@@ -1,5 +1,5 @@
 
-extern crate mmap;
+// extern crate mmap;
 extern crate time;
 extern crate timely;
 extern crate dataflow_join;
@@ -9,10 +9,8 @@ use std::rc::Rc;
 use dataflow_join::*;
 use dataflow_join::graph::{GraphTrait, GraphMMap, GraphExtenderExt};
 
-use timely::dataflow::*;
 use timely::dataflow::operators::*;
 use timely::dataflow::operators::aggregation::Aggregate;
-use timely::progress::timestamp::RootTimestamp;
 
 fn main () {
 
@@ -76,7 +74,7 @@ fn main () {
 
             input.advance_to(round as u64 + 1);
             root.step();
-            while probe.less_than(&RootTimestamp::new((round - ::std::cmp::min(1, round)) as u64)) {
+            while probe.less_than(input.time()) {
                 root.step();
             }
         }
