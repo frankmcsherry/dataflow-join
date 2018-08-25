@@ -1,5 +1,5 @@
+extern crate rand;
 extern crate core_affinity;
-extern crate time;
 extern crate timely;
 extern crate dataflow_join;
 
@@ -29,14 +29,13 @@ fn main () {
 
         let (mut input, probe) = root.dataflow(|builder| {
 
-            let (input, cliques) = builder.new_input::<u32>();
+            let (input, edges) = builder.new_input::<(u32, u32)>();
 
-            // pairs
-            let cliques = cliques.extend(vec![&graph.extend_using(|&a| a as u64)]);
+            // // pairs
+            // let cliques = cliques.extend(vec![&graph.extend_using(|&a| a as u64)]);
 
             // triangles
-            let cliques = cliques.flat_map(|(p, es)| es.into_iter().map(move |e| (p, e)))
-                                 .extend(vec![&graph.extend_using(|&(a,_)| a as u64)]);
+            let cliques = edges.extend(vec![&graph.extend_using(|&(a,_)| a as u64)]);
 
             // quadrangles?
             let cliques = cliques.flat_map(|(p,es)| es.into_iter().map(move |e| (p, e)))
@@ -65,21 +64,30 @@ fn main () {
             (input, cliques.probe())
         });
 
-        let nodes = graph.nodes() - 1;
-        let limit = (nodes / step_size) + 1;
-        for round in 0..limit {
-            for source in 0..step_size {
-                let candidate = source + round * step_size;
-                if candidate % peers == index && candidate < nodes {
-                    input.send(candidate as u32);
+        let mut edges = Vec::new();
+        for node in 0 .. graph.nodes() {
+            for &edge in graph.edges(node) {
+                if (node + (edge as usize)) % peers == index {
+                    edges.push((node as u32, edge));
                 }
             }
+        }
+        use rand::prelude::*;
+        let mut rng = thread_rng();
+        rng.shuffle(&mut edges);
 
+        let mut round = 0;
+        while !edges.is_empty() {
+            let to_take = std::cmp::min(edges.len(), step_size / peers);
+            for _index in 0 .. to_take {
+                input.send(edges.pop().unwrap());
+            }
             input.advance_to(round as u64 + 1);
-            root.step();
+            round += 1;
             while probe.less_than(input.time()) {
                 root.step();
             }
         }
+
     }).unwrap();
 }
