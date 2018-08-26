@@ -101,15 +101,18 @@ where PE::Prefix: Data,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
-        let mut vector = Vec::new();
-        stream.unary(exch, "Propose", move |_,_| move |input, output| {
+        stream.unary_stream(exch, "Propose", move |input, output| {
+            let mut effort = 0;
             while let Some((time, data)) = input.next() {
-                data.swap(&mut vector);
-                output.session(&time).give_iterator(vector.drain(..).map(|p| {
+                effort += data.len();
+                output.session(&time).give_iterator(data.drain(..).map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
                     (p, vec)
                 }));
+                if effort > 4096 {
+                    break;
+                }
             }
         })
     }
