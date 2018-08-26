@@ -100,13 +100,17 @@ where PE::Prefix: Data,
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
         stream.unary_stream(exch, "Propose", move |input, output| {
-            // while 
-            if let Some((time, data)) = input.next() {
+            let mut effort = 0;
+            while let Some((time, data)) = input.next() {
+                effort += data.len();
                 output.session(&time).give_iterator(data.drain(..).map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
                     (p, vec)
                 }));
+                if effort > 4096 {
+                    break;
+                }
             }
         })
     }
