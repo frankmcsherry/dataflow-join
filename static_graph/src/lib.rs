@@ -7,7 +7,7 @@ extern crate mmap;
 use std::rc::Rc;
 
 use timely::dataflow::*;
-use timely::dataflow::operators::*;
+use timely::dataflow::operators::{Operator, Map, Partition, Concatenate};
 use timely::dataflow::channels::pact::Exchange;
 use timely::ExchangeData as Data;
 
@@ -80,20 +80,28 @@ where PE::Prefix: Data,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
+        let mut buffer = Vec::new();
         let mut vector = Vec::new();
-        stream.unary(exch, "Count", move |_,_| move |input, output| {
+        stream.unary_notify(exch, "Count", Vec::new(), move |input, output, notificator| {
             while let Some((time, data)) = input.next() {
                 data.swap(&mut vector);
-                for &mut (ref p, ref mut c, ref mut i) in vector.iter_mut() {
-                    let nc = (*clone).count(p);
-                    if &nc < c {
-                        *c = nc;
-                        *i = ident;
+                buffer.extend(vector.drain(..));
+                notificator.notify_at(time.retain());
+            }
+
+            notificator.for_each(|time, _cnt, _not| {
+                let mut session = output.session(&time);
+                for (p, mut c, mut i) in buffer.drain(..) {
+                    let nc = (*clone).count(&p);
+                    if nc < c {
+                        c = nc;
+                        i = ident;
+                    }
+                    if c > 0 {
+                        session.give((p, c, i));
                     }
                 }
-                vector.retain(|x| x.1 > 0);
-                output.session(&time).give_vec(&mut vector);
-            }
+            });
         })
     }
 
@@ -101,37 +109,48 @@ where PE::Prefix: Data,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
+        let mut buffer = Vec::new();
         let mut vector = Vec::new();
-        stream.unary(exch, "Propose", move |_,_| move |input, output| {
-            let mut effort = 0;
+        stream.unary_notify(exch, "Propose", Vec::new(), move |input, output, notificator| {
             while let Some((time, data)) = input.next() {
                 data.swap(&mut vector);
-                effort += vector.len();
-                output.session(&time).give_iterator(vector.drain(..).map(|p| {
-                    let mut vec = Vec::new();
-                    (*clone).propose(&p, &mut vec);
-                    (p, vec)
-                }));
-                if effort > 4096 {
-                    break;
-                }
+                buffer.extend(vector.drain(..));
+                notificator.notify_at(time.retain());
             }
+
+            notificator.for_each(|time, _cnt, _not| {
+                let mut session = output.session(&time);
+                for prefix in buffer.drain(..) {
+                    let mut vec = Vec::new();
+                    (*clone).propose(&prefix, &mut vec);
+                    session.give((prefix, vec));
+                }
+            });
         })
     }
     fn intersect(&self, stream: Stream<G, (Self::Prefix, Vec<Self::Extension>)>) -> Stream<G, (Self::Prefix, Vec<Self::Extension>)> {
         let logic = self.logic();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
+        let mut buffer = Vec::new();
         let mut vector = Vec::new();
-        stream.unary(exch, "Intersect", move |_,_| move |input, output| {
+        stream.unary_notify(exch, "Intersect", Vec::new(), move |input, output, notificator| {
             while let Some((time, data)) = input.next() {
                 data.swap(&mut vector);
-                for &mut (ref prefix, ref mut extensions) in vector.iter_mut() {
-                    (*clone).intersect(prefix, extensions);
-                }
-                vector.retain(|x| x.1.len() > 0);
-                output.session(&time).give_vec(&mut vector);
+                buffer.extend(vector.drain(..));
+                notificator.notify_at(time.retain());
             }
+
+            notificator.for_each(|time, _cnt, _not| {
+                let mut session = output.session(&time);
+
+                for (prefix, mut extensions) in buffer.drain(..) {
+                    (*clone).intersect(&prefix, &mut extensions);
+                    if extensions.len() > 0 {
+                        session.give((prefix, extensions));
+                    }
+                }
+            });
         })
     }
 }
