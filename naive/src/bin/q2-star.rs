@@ -21,11 +21,7 @@ fn main () {
             let v1f = graph.forward(v1);
             for &v3 in v1f.iter() {
                 intersect_and(graph.edges(v1), graph.edges(v3), |x| prefix.push(x));
-                for (index_v2, &_v2) in prefix.iter().enumerate() {
-                    for &v4 in prefix[(index_v2 + 1)..].iter() {
-                        if _v2 != u32::max_value() && v4 != u32::max_value() { count += 1 }
-                     }
-                }
+                count += (prefix.len() * (prefix.len() - 1)) / 2;
                 prefix.clear();
             }
             v1 += peers;
