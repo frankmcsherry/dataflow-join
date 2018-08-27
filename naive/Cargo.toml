@@ -1,0 +1,8 @@
+[package]
+name = "naive"
+version = "0.1.0"
+authors = ["Frank McSherry <fmcsherry@me.com>"]
+
+[dependencies]
+graph_map = { git = "https://github.com/frankmcsherry/graph-map" }
+timely = "0.6"
