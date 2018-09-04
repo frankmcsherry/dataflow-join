@@ -6,7 +6,6 @@ authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies.timely]
 git="https://github.com/frankmcsherry/timely-dataflow"
-branch = "dataplane_mockup"
 
 [dependencies]
 core_affinity = "0.5.9"
