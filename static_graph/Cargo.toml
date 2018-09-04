@@ -5,11 +5,11 @@ version = "0.0.1"
 authors = ["Frank McSherry <fmcsherry@me.com>"]
 
 [dependencies.timely]
-git="http://github.com/frankmcsherry/timely-dataflow"
+git="https://github.com/frankmcsherry/timely-dataflow"
 
 [dependencies]
-# abomonation="*"
-#timely="0.0.13"
+core_affinity = "0.5.9"
 timely_sort="0.1.1"
 time = "*"
+rand = "0.5.5"
 mmap="*"

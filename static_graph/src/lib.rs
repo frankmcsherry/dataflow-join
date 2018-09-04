@@ -80,17 +80,19 @@ where PE::Prefix: Data,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |&(ref x,_,_)| (*logic)(x));
-        stream.unary_stream(exch, "Count", move |input, output| {
+        let mut vector = Vec::new();
+        stream.unary(exch, "Count", move |_,_| move |input, output| {
             while let Some((time, data)) = input.next() {
-                for &mut (ref p, ref mut c, ref mut i) in data.iter_mut() {
+                data.swap(&mut vector);
+                for &mut (ref p, ref mut c, ref mut i) in vector.iter_mut() {
                     let nc = (*clone).count(p);
                     if &nc < c {
                         *c = nc;
                         *i = ident;
                     }
                 }
-                data.retain(|x| x.1 > 0);
-                output.session(&time).give_content(data);
+                vector.retain(|x| x.1 > 0);
+                output.session(&time).give_vec(&mut vector);
             }
         })
     }
@@ -99,11 +101,13 @@ where PE::Prefix: Data,
         let clone = self.clone();
         let logic = self.logic();
         let exch = Exchange::new(move |x| (*logic)(x));
-        stream.unary_stream(exch, "Propose", move |input, output| {
+        let mut vector = Vec::new();
+        stream.unary(exch, "Propose", move |_,_| move |input, output| {
             let mut effort = 0;
             while let Some((time, data)) = input.next() {
-                effort += data.len();
-                output.session(&time).give_iterator(data.drain(..).map(|p| {
+                data.swap(&mut vector);
+                effort += vector.len();
+                output.session(&time).give_iterator(vector.drain(..).map(|p| {
                     let mut vec = Vec::new();
                     (*clone).propose(&p, &mut vec);
                     (p, vec)
@@ -118,13 +122,15 @@ where PE::Prefix: Data,
         let logic = self.logic();
         let clone = self.clone();
         let exch = Exchange::new(move |&(ref x,_)| (*logic)(x));
-        stream.unary_stream(exch, "Intersect", move |input, output| {
+        let mut vector = Vec::new();
+        stream.unary(exch, "Intersect", move |_,_| move |input, output| {
             while let Some((time, data)) = input.next() {
-                for &mut (ref prefix, ref mut extensions) in data.iter_mut() {
+                data.swap(&mut vector);
+                for &mut (ref prefix, ref mut extensions) in vector.iter_mut() {
                     (*clone).intersect(prefix, extensions);
                 }
-                data.retain(|x| x.1.len() > 0);
-                output.session(&time).give_content(data);
+                vector.retain(|x| x.1.len() > 0);
+                output.session(&time).give_vec(&mut vector);
             }
         })
     }

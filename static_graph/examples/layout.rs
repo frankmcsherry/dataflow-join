@@ -53,7 +53,7 @@ fn layout(prefix: &str) -> Vec<(u32, u32)> {
 
 fn organize_graph(graph: &mut Vec<(u32, u32)>) {
 
-    for index in (0..graph.len()) {
+    for index in 0..graph.len() {
         if graph[index].1 < graph[index].0 {
             graph[index] = (graph[index].1, graph[index].0);
         }
@@ -80,7 +80,7 @@ fn _extract_fragment(graph: &Vec<(u32, u32)>, index: u64, parts: u64) -> GraphVe
         }
     }
 
-    for index in (1..nodes.len()) {
+    for index in 1..nodes.len() {
         nodes[index] += nodes[index - 1];
     }
 

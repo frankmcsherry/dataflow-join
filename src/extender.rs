@@ -4,11 +4,10 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::ops::DerefMut;
 
 use timely::ExchangeData;
 use timely::dataflow::{Stream, Scope};
-use timely::dataflow::operators::{Unary, Binary, Probe};
+use timely::dataflow::operators::{Probe, Operator};
 use timely::dataflow::channels::pact::Exchange;
 use timely::progress::Timestamp;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -21,7 +20,7 @@ use {Index, StreamPrefixExtender};
 /// The index stream provides information about update times it has completely accepted via
 /// its `handle` field, which is a timely dataflow probe handle, and can be interrogated
 /// about whether outstanding times might still exist less than any query time.
-/// There is also a function `hash` from the key type `K` to `u64` values to indicate how 
+/// There is also a function `hash` from the key type `K` to `u64` values to indicate how
 /// the data are partitioned, so that users can align their query streams.
 pub struct IndexStream<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp> {
     /// Times completely absorded into the index.
@@ -37,10 +36,10 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
     /// Extends an `IndexStream` using the supplied functions.
     ///
     /// The `logic` function maps prefixes to index keys.
-    /// The `func` function compares timestamps, acting as either `lt` or `le` depending 
+    /// The `func` function compares timestamps, acting as either `lt` or `le` depending
     /// on the need.
-    pub fn extend_using<P, L, F>(&self, logic: L, func: F) -> Rc<IndexExtender<K, V, T, P, L, H, F>> 
-    where 
+    pub fn extend_using<P, L, F>(&self, logic: L, func: F) -> Rc<IndexExtender<K, V, T, P, L, H, F>>
+    where
         L: Fn(&P)->K+'static,
         F: Fn(&T, &T)->bool+'static
     {
@@ -60,7 +59,7 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
     /// The index can be static with no changes, or wholy dynamic with no starting data,
     /// or a mix of both. If neither stream has any data, you are probably using the wrong
     /// abstraction (though it will still work correctly).
-    pub fn from<G>(hash: H, initially: &Stream<G, (K, V)>, updates: &Stream<G, ((K, V), i32)>) -> Self 
+    pub fn from<G>(hash: H, initially: &Stream<G, (K, V)>, updates: &Stream<G, ((K, V), i32)>) -> Self
     where
         G: Scope<Timestamp=T>,
         K: ExchangeData,
@@ -84,23 +83,31 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
 
         let exch1 = Exchange::new(move |x: &((K,V),i32)| (*hash_1)((x.0).0.clone()));
         let exch2 = Exchange::new(move |x: &(K,V)| (*hash_2)(x.0.clone()));
-        let handle = updates.binary_notify::<_,(),_,_,_>(initially, exch1, exch2, "Index", vec![], 
 
+        let mut buffer1 = Vec::new();
+        let mut buffer2 = Vec::new();
+
+        let handle = updates.binary_notify(initially, exch1, exch2, "Index", vec![],
+            //::<_,(),_,_,_>
             move |input1, input2,_output,notificator| {
+
 
                 // extract, enqueue updates.
                 input1.for_each(|time, data| {
+                    if false { _output.session(&time).give(()); }
+                    data.swap(&mut buffer1);
                     map.entry(time.time().clone())
                        .or_insert(Vec::new())
-                       .extend(data.drain(..));
-                    notificator.notify_at(time);
+                       .extend(buffer1.drain(..));
+                    notificator.notify_at(time.retain());
                 });
 
                 // populate initial collection
                 input2.for_each(|time, data| {
+                    data.swap(&mut buffer2);
                     if let Some(ref mut sorter) = sorter {
-                        sorter.push(data.deref_mut());
-                        notificator.notify_at(time);
+                        sorter.push(&mut buffer2);
+                        notificator.notify_at(time.retain());
                     }
                 });
 
@@ -121,24 +128,24 @@ impl<K: Ord+Hash+Clone, V: Ord+Clone, H: Fn(K)->u64, T: Timestamp+Ord> IndexStre
             }
         ).probe();
 
-        IndexStream { 
+        IndexStream {
             handle: handle,
             index: index_2,
             hash: hash_3,
         }
     }
 
-} 
+}
 
 
 /// An `IndexStream` wrapper adding key selectors and time validators.
 ///
 /// The `IndexExtender` wraps an index so that different types `P` can gain access to the
 /// index simply by specifying how to extract a `&K` from a `&P`. In addition, we wrap up
-/// a "time validator" that indicates for times t1 and t2 whether updates at t1 should be 
+/// a "time validator" that indicates for times t1 and t2 whether updates at t1 should be
 /// included in answers for time t2.
 pub struct IndexExtender<K, V, T, P, L, H, F>
-where 
+where
     K: Ord+Hash+Clone,
     V: Ord+Clone,
     T: Timestamp,
@@ -154,8 +161,8 @@ where
     phantom: PhantomData<P>,
 }
 
-impl<K, V, G, P, L, H, F, W> StreamPrefixExtender<G, W> for Rc<IndexExtender<K, V, G::Timestamp, P, L, H, F>> 
-where 
+impl<K, V, G, P, L, H, F, W> StreamPrefixExtender<G, W> for Rc<IndexExtender<K, V, G::Timestamp, P, L, H, F>>
+where
     K: Ord+Hash+Clone+ExchangeData,
     V: Ord+Clone+ExchangeData,
     G: Scope,
@@ -170,7 +177,7 @@ where
     type Extension = V;
 
     fn count(&self, prefixes: Stream<G, (Self::Prefix, u64, u64, W)>, ident: u64) -> Stream<G, (Self::Prefix, u64, u64, W)> {
-        
+
         let hash = self.hash.clone();
         let index = self.index.clone();
         let logic1 = self.logic.clone();
@@ -180,19 +187,26 @@ where
         let handle = self.handle.clone();
         let mut blocked = HashMap::new();//vec![];
 
+        let mut buffer1 = Vec::new();
+
         let exch = Exchange::new(move |&(ref x,_,_,_)| (*hash)((*logic1)(x)));
 
-        prefixes.unary_stream(exch, "Count", move |input, output| {
+        prefixes.unary(exch, "Count", move |_,_| move |input, output| {
 
-            // The logic in this operator should only be applied to data inputs at `time` once we are 
+            // The logic in this operator should only be applied to data inputs at `time` once we are
             // certain that the second input has also advanced to `time`. The shared index `clone` is
             // only guaranteed to be up to date once that has happened. So, if we receive data inputs
             // for a time that has not also been achieved in the other input, we must delay it.
             //
             // The same structure also applies to `propose` and `intersect`, so these comments apply too.
 
-            // put all (time, data) pairs into a temporary list 
-            input.for_each(|time, data| blocked.entry(time).or_insert(Vec::new()).extend(data.drain(..)));
+            // put all (time, data) pairs into a temporary list
+            input.for_each(|time, data| {
+                data.swap(&mut buffer1);
+                blocked.entry(time.retain())
+                       .or_insert(Vec::new())
+                       .extend(buffer1.drain(..))
+                });
 
             // scan each stashed element and see if it is time to process it.
            for (time, data) in blocked.iter_mut() {
@@ -220,17 +234,20 @@ where
 
         let index = self.index.clone();
 
+        let mut buffer1 = Vec::new();
+
         let mut blocked = HashMap::new();//vec![];
 
-        stream.unary_stream(exch, "Propose", move |input, output| {
+        stream.unary(exch, "Propose", move |_,_| move |input, output| {
 
-            input.for_each(|time, data|
+            input.for_each(|time, data| {
+                data.swap(&mut buffer1);
                 blocked
-                    .entry(time)
+                    .entry(time.retain())
                     .or_insert(Vec::new())
                     // .extend(data.drain(..).map(|(p,s)| (p,vec![],s)))
-                    .push(::std::mem::replace(data.deref_mut(), Vec::new()))
-            );
+                    .push(::std::mem::replace(&mut buffer1, Vec::new()))
+            });
 
 
             // scan each stashed element and see if it is time to process it.
@@ -247,9 +264,9 @@ where
                         let mut data = list.drain(..).map(|(p,s)| (p,vec![],s)).collect::<Vec<_>>();
                         (*index).borrow_mut().propose(&mut data, &*logic2, &|t| (*valid)(t, time.time()));
                         let mut session = output.session(&time);
-                        for x in data.drain(..) { 
+                        for x in data.drain(..) {
                             if x.1.len() > 0 {
-                                session.give(x); 
+                                session.give(x);
                             }
                         }
                     }
@@ -269,12 +286,18 @@ where
         let index = self.index.clone();
         let handle = self.handle.clone();
 
+        let mut buffer = Vec::new();
         let mut blocked = HashMap::new();
         let exch = Exchange::new(move |&(ref x,_,_)| (*hash)((*logic1)(x)));
 
-        stream.unary_stream(exch, "Intersect", move |input, output| {
-    
-            input.for_each(|time, data| blocked.entry(time).or_insert(Vec::new()).extend(data.drain(..)));
+        stream.unary(exch, "Intersect", move |_,_| move |input, output| {
+
+            input.for_each(|time, data| {
+                data.swap(&mut buffer);
+                blocked.entry(time.retain())
+                       .or_insert(Vec::new())
+                       .extend(buffer.drain(..))
+            });
 
             for (time, data) in blocked.iter_mut() {
 
@@ -308,7 +331,7 @@ mod merge_sorter {
         pub fn pop(&mut self) -> T {
             debug_assert!(self.head < self.tail);
             self.head += 1;
-            unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset(((self.head as isize) - 1) )) }
+            unsafe { ::std::ptr::read(self.list.as_mut_ptr().offset((self.head as isize) - 1)) }
         }
         #[inline(always)]
         pub fn peek(&self) -> &T {
@@ -389,7 +412,7 @@ mod merge_sorter {
             else {
                 ::std::mem::replace(batch, Vec::new())
             };
-            
+
             if batch.len() > 0 {
                 batch.sort_unstable_by(|x,y| (self.logic)(x).cmp(&(self.logic)(y)));
                 self.queue.push(vec![batch]);
@@ -402,18 +425,18 @@ mod merge_sorter {
             }
         }
 
-        // This is awkward, because it isn't a power-of-two length any more, and we don't want 
+        // This is awkward, because it isn't a power-of-two length any more, and we don't want
         // to break it down to be so.
         pub fn _push_list(&mut self, list: Vec<Vec<D>>) {
             while self.queue.len() > 1 && self.queue[self.queue.len()-1].len() < list.len() {
                 let list1 = self.queue.pop().unwrap();
                 let list2 = self.queue.pop().unwrap();
                 let merged = self.merge_by(list1, list2);
-                self.queue.push(merged);            
+                self.queue.push(merged);
             }
             self.queue.push(list);
         }
-        
+
         #[inline(never)]
         pub fn finish_into(&mut self, target: &mut Vec<Vec<D>>) {
             while self.queue.len() > 1 {
@@ -431,7 +454,7 @@ mod merge_sorter {
         // merges two sorted input lists into one sorted output list.
         #[inline(never)]
         fn merge_by(&mut self, list1: Vec<Vec<D>>, list2: Vec<Vec<D>>) -> Vec<Vec<D>> {
-            
+
             // use std::cmp::Ordering;
 
             // TODO: `list1` and `list2` get dropped; would be better to reuse?
@@ -441,18 +464,18 @@ mod merge_sorter {
             let mut list1 = VecQueue::from(list1);
             let mut list2 = VecQueue::from(list2);
 
-            let mut head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
-            let mut head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+            let mut head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() };
+            let mut head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() };
 
             // while we have valid data in each input, merge.
             while !head1.is_empty() && !head2.is_empty() {
 
                 while (result.capacity() - result.len()) > 0 && head1.len() > 0 && head2.len() > 0 {
-                    
+
                     // let cmp = {
                     //     let x = head1.peek();
                     //     let y = head2.peek();
-                    //     x.cmp(&y) 
+                    //     x.cmp(&y)
                     // };
                     if (self.logic)(head1.peek()) < (self.logic)(head2.peek()) {
                         unsafe { push_unchecked(&mut result, head1.pop()); }
@@ -470,24 +493,24 @@ mod merge_sorter {
                     //         if diff != 0 {
                     //             unsafe { push_unchecked(&mut result, (data1, diff)); }
                     //         }
-                    //     }           
+                    //     }
                     // }
                 }
-                
+
                 if result.capacity() == result.len() {
                     output.push(result);
-                    result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024)); 
+                    result = self.stash.pop().unwrap_or_else(|| Vec::with_capacity(1024));
                 }
 
-                if head1.is_empty() { 
-                    let done1 = head1.done(); 
+                if head1.is_empty() {
+                    let done1 = head1.done();
                     if done1.capacity() == 1024 { self.stash.push(done1); }
-                    head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() }; 
+                    head1 = if !list1.is_empty() { VecQueue::from(list1.pop()) } else { VecQueue::new() };
                 }
-                if head2.is_empty() { 
-                    let done2 = head2.done(); 
+                if head2.is_empty() {
+                    let done2 = head2.done();
                     if done2.capacity() == 1024 { self.stash.push(done2); }
-                    head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() }; 
+                    head2 = if !list2.is_empty() { VecQueue::from(list2.pop()) } else { VecQueue::new() };
                 }
             }
 
@@ -499,8 +522,8 @@ mod merge_sorter {
                 for _ in 0 .. head1.len() { result.push(head1.pop()); }
                 output.push(result);
             }
-            while !list1.is_empty() { 
-                output.push(list1.pop()); 
+            while !list1.is_empty() {
+                output.push(list1.pop());
             }
 
             if !head2.is_empty() {
@@ -508,8 +531,8 @@ mod merge_sorter {
                 for _ in 0 .. head2.len() { result.push(head2.pop()); }
                 output.push(result);
             }
-            while !list2.is_empty() { 
-                output.push(list2.pop()); 
+            while !list2.is_empty() {
+                output.push(list2.pop());
             }
 
             output
