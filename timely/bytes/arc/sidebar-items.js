@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Bytes","A thread-safe byte buffer backed by a shared allocation."]]});

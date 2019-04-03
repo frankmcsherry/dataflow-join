@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["RefOrMut","Either an immutable or mutable reference."]],"struct":[["Message","A wrapped message which may be either typed or binary data."]]});

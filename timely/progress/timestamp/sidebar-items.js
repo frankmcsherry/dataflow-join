@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["RootSummary","An empty path summary for root timestamps."],["RootTimestamp","An empty timestamp used by the root scope."]],"trait":[["PathSummary","A summary of how a timestamp advances along a timely dataflow path."],["Timestamp","A composite trait for types that serve as timestamps in timely dataflow."]]});

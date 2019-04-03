@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["arc","An `Arc`-backed mutable byte slice backed by a common allocation."],["rc","An `Rc`-backed mutable byte slice backed by a common allocation."]]});

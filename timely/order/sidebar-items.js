@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["PartialOrder","A type that is partially ordered."],["TotalOrder","A type that is totally ordered."]]});

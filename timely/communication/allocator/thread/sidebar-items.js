@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Puller","The pull half of an intra-thread channel."],["Pusher","The push half of an intra-thread channel."],["Thread","An allocator for intra-thread communication."]]});

@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["AutoflushSession","A session which will flush itself when dropped."],["Buffer","Buffers data sent at the same time, for efficient communication."],["Session","An output session for sending records at a specified time."]]});

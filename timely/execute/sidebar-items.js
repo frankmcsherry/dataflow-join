@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["example","Executes a single-threaded timely dataflow computation."],["execute","Executes a timely dataflow from a configuration and per-communicator logic."],["execute_from","Executes a timely dataflow from supplied allocators and logging."],["execute_from_args","Executes a timely dataflow from supplied arguments and per-communicator logic."]]});

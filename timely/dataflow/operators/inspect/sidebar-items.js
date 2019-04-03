@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["Inspect","Methods to inspect records and batches of records on a stream."]]});

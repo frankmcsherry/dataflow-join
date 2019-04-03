@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Builder","A topology builder, which can summarize reachability along paths."],["Summary","A summary of minimal path summaries in a timely dataflow graph."],["Tracker","An interactive tracker of propagated reachability information."]]});

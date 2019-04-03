@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["child","A child dataflow scope, used to build nested dataflow scopes."]],"trait":[["Scope","The fundamental operations required to add and connect operators in a timely dataflow graph."],["ScopeParent","The information a child scope needs from its parent."]]});

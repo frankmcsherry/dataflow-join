@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Summary","Summarizes a path within a scope."]]});

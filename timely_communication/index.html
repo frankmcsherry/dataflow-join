@@ -1,0 +1,78 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API documentation for the Rust `timely_communication` crate."><meta name="keywords" content="rust, rustlang, rust-lang, timely_communication"><title>timely_communication - Rust</title><link rel="stylesheet" type="text/css" href="../normalize.css"><link rel="stylesheet" type="text/css" href="../rustdoc.css" id="mainThemeStyle"><link rel="stylesheet" type="text/css" href="../dark.css"><link rel="stylesheet" type="text/css" href="../light.css" id="themeStyle"><script src="../storage.js"></script><noscript><link rel="stylesheet" href="../noscript.css"></noscript><style type="text/css">#crate-search{background-image:url("../down-arrow.svg");}</style></head><body class="rustdoc mod"><!--[if lte IE 8]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="sidebar-menu">&#9776;</div><p class='location'>Crate timely_communication</p><div class="sidebar-elems"><a id='all-types' href='all.html'><p>See all timely_communication's items</p></a><div class="block items"><ul><li><a href="#reexports">Re-exports</a></li><li><a href="#modules">Modules</a></li><li><a href="#traits">Traits</a></li></ul></div><p class='location'></p><script>window.sidebarCurrent = {name: 'timely_communication', ty: 'mod', relpath: '../'};</script></div></nav><div class="theme-picker"><button id="theme-picker" aria-label="Pick another theme!"><img src="../brush.svg" width="18" alt="Pick another theme!"></button><div id="theme-choices"></div></div><script src="../theme.js"></script><nav class="sub"><form class="search-form js-only"><div class="search-container"><div><select id="crate-search"><option value="All crates">All crates</option></select><input class="search-input" name="search" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"></div><a id="settings-menu" href="../settings.html"><img src="../wheel.svg" width="18" alt="Change settings"></a></div></form></nav><section id="main" class="content"><h1 class='fqn'><span class='out-of-band'><span id='render-detail'><a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">[<span class='inner'>&#x2212;</span>]</a></span><a class='srclink' href='../src/timely_communication/lib.rs.html#1-143' title='goto source code'>[src]</a></span><span class='in-band'>Crate <a class="mod" href=''>timely_communication</a></span></h1><div class='docblock'><p>A simple communication infrastructure providing typed exchange channels.</p>
+<p>This crate is part of the timely dataflow system, used primarily for its inter-worker communication.
+It may be independently useful, but it is separated out mostly to make clear boundaries in the project.</p>
+<p>Threads are spawned with an <a href="./allocator/generic/enum.Generic.html"><code>allocator::Generic</code></a>, whose <code>allocate</code> method returns a pair of several send endpoints and one
+receive endpoint. Messages sent into a send endpoint will eventually be received by the corresponding worker,
+if it receives often enough. The point-to-point channels are each FIFO, but with no fairness guarantees.</p>
+<p>To be communicated, a type must implement the <a href="./trait.Serialize.html"><code>Serialize</code></a> trait. A default implementation of <code>Serialize</code> is
+provided for any type implementing <a href="../abomonation/trait.Abomonation.html"><code>Abomonation</code></a>. To implement other serialization strategies, wrap your type
+and implement <code>Serialize</code> for your wrapper.</p>
+<p>Channel endpoints also implement a lower-level <code>push</code> and <code>pull</code> interface (through the <a href="./trait.Push.html"><code>Push</code></a> and <a href="./trait.Pull.html"><code>Pull</code></a>
+traits), which is used for more precise control of resources.</p>
+<h1 id="examples" class="section-header"><a href="#examples">Examples</a></h1>
+<div class="example-wrap"><pre class="rust rust-example-rendered">
+<span class="kw">use</span> <span class="ident">timely_communication</span>::<span class="ident">Allocate</span>;
+
+<span class="comment">// configure for two threads, just one process.</span>
+<span class="kw">let</span> <span class="ident">config</span> <span class="op">=</span> <span class="ident">timely_communication</span>::<span class="ident">Configuration</span>::<span class="ident">Process</span>(<span class="number">2</span>);
+
+<span class="comment">// initializes communication, spawns workers</span>
+<span class="kw">let</span> <span class="ident">guards</span> <span class="op">=</span> <span class="ident">timely_communication</span>::<span class="ident">initialize</span>(<span class="ident">config</span>, <span class="op">|</span><span class="kw-2">mut</span> <span class="ident">allocator</span><span class="op">|</span> {
+    <span class="macro">println</span><span class="macro">!</span>(<span class="string">&quot;worker {} started&quot;</span>, <span class="ident">allocator</span>.<span class="ident">index</span>());
+
+    <span class="comment">// allocates pair of senders list and one receiver.</span>
+    <span class="kw">let</span> (<span class="kw-2">mut</span> <span class="ident">senders</span>, <span class="kw-2">mut</span> <span class="ident">receiver</span>) <span class="op">=</span> <span class="ident">allocator</span>.<span class="ident">allocate</span>(<span class="number">0</span>);
+
+    <span class="comment">// send typed data along each channel</span>
+    <span class="kw">use</span> <span class="ident">timely_communication</span>::<span class="ident">Message</span>;
+    <span class="ident">senders</span>[<span class="number">0</span>].<span class="ident">send</span>(<span class="ident">Message</span>::<span class="ident">from_typed</span>(<span class="macro">format</span><span class="macro">!</span>(<span class="string">&quot;hello, {}&quot;</span>, <span class="number">0</span>)));
+    <span class="ident">senders</span>[<span class="number">1</span>].<span class="ident">send</span>(<span class="ident">Message</span>::<span class="ident">from_typed</span>(<span class="macro">format</span><span class="macro">!</span>(<span class="string">&quot;hello, {}&quot;</span>, <span class="number">1</span>)));
+
+    <span class="comment">// no support for termination notification,</span>
+    <span class="comment">// we have to count down ourselves.</span>
+    <span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">expecting</span> <span class="op">=</span> <span class="number">2</span>;
+    <span class="kw">while</span> <span class="ident">expecting</span> <span class="op">&gt;</span> <span class="number">0</span> {
+
+        <span class="ident">allocator</span>.<span class="ident">pre_work</span>();
+        <span class="kw">if</span> <span class="kw">let</span> <span class="prelude-val">Some</span>(<span class="ident">message</span>) <span class="op">=</span> <span class="ident">receiver</span>.<span class="ident">recv</span>() {
+            <span class="kw">use</span> <span class="ident">std</span>::<span class="ident">ops</span>::<span class="ident">Deref</span>;
+            <span class="macro">println</span><span class="macro">!</span>(<span class="string">&quot;worker {}: received: &lt;{}&gt;&quot;</span>, <span class="ident">allocator</span>.<span class="ident">index</span>(), <span class="ident">message</span>.<span class="ident">deref</span>());
+            <span class="ident">expecting</span> <span class="op">-=</span> <span class="number">1</span>;
+        }
+        <span class="ident">allocator</span>.<span class="ident">post_work</span>();
+    }
+
+    <span class="comment">// optionally, return something</span>
+    <span class="ident">allocator</span>.<span class="ident">index</span>()
+});
+
+<span class="comment">// computation runs until guards are joined or dropped.</span>
+<span class="kw">if</span> <span class="kw">let</span> <span class="prelude-val">Ok</span>(<span class="ident">guards</span>) <span class="op">=</span> <span class="ident">guards</span> {
+    <span class="kw">for</span> <span class="ident">guard</span> <span class="kw">in</span> <span class="ident">guards</span>.<span class="ident">join</span>() {
+        <span class="macro">println</span><span class="macro">!</span>(<span class="string">&quot;result: {:?}&quot;</span>, <span class="ident">guard</span>);
+    }
+}
+<span class="kw">else</span> { <span class="macro">println</span><span class="macro">!</span>(<span class="string">&quot;error in computation&quot;</span>); }</pre></div>
+<p>The should produce output like:</p>
+
+<div class='information'><div class='tooltip ignore'>ⓘ<span class='tooltiptext'>This example is not tested</span></div></div><div class="example-wrap"><pre class="rust rust-example-rendered ignore">
+<span class="ident">worker</span> <span class="number">0</span> <span class="ident">started</span>
+<span class="ident">worker</span> <span class="number">1</span> <span class="ident">started</span>
+<span class="ident">worker</span> <span class="number">0</span>: <span class="ident">received</span>: <span class="op">&lt;</span><span class="ident">hello</span>, <span class="number">0</span><span class="op">&gt;</span>
+<span class="ident">worker</span> <span class="number">1</span>: <span class="ident">received</span>: <span class="op">&lt;</span><span class="ident">hello</span>, <span class="number">1</span><span class="op">&gt;</span>
+<span class="ident">worker</span> <span class="number">0</span>: <span class="ident">received</span>: <span class="op">&lt;</span><span class="ident">hello</span>, <span class="number">0</span><span class="op">&gt;</span>
+<span class="ident">worker</span> <span class="number">1</span>: <span class="ident">received</span>: <span class="op">&lt;</span><span class="ident">hello</span>, <span class="number">1</span><span class="op">&gt;</span>
+<span class="ident">result</span>: <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+<span class="ident">result</span>: <span class="prelude-val">Ok</span>(<span class="number">1</span>)</pre></div>
+</div><h2 id='reexports' class='section-header'><a href="#reexports">Re-exports</a></h2>
+<table><tr><td><code>pub use allocator::<a class="enum" href="../timely_communication/allocator/generic/enum.Generic.html" title="enum timely_communication::allocator::generic::Generic">Generic</a> as Allocator;</code></td></tr><tr><td><code>pub use allocator::<a class="trait" href="../timely_communication/allocator/trait.Allocate.html" title="trait timely_communication::allocator::Allocate">Allocate</a>;</code></td></tr><tr><td><code>pub use initialize::<a class="fn" href="../timely_communication/initialize/fn.initialize.html" title="fn timely_communication::initialize::initialize">initialize</a>;</code></td></tr><tr><td><code>pub use initialize::<a class="fn" href="../timely_communication/initialize/fn.initialize_from.html" title="fn timely_communication::initialize::initialize_from">initialize_from</a>;</code></td></tr><tr><td><code>pub use initialize::<a class="enum" href="../timely_communication/initialize/enum.Configuration.html" title="enum timely_communication::initialize::Configuration">Configuration</a>;</code></td></tr><tr><td><code>pub use initialize::<a class="struct" href="../timely_communication/initialize/struct.WorkerGuards.html" title="struct timely_communication::initialize::WorkerGuards">WorkerGuards</a>;</code></td></tr><tr><td><code>pub use message::<a class="struct" href="../timely_communication/message/struct.Message.html" title="struct timely_communication::message::Message">Message</a>;</code></td></tr></table><h2 id='modules' class='section-header'><a href="#modules">Modules</a></h2>
+<table><tr class='module-item'><td><a class="mod" href="allocator/index.html" title='timely_communication::allocator mod'>allocator</a></td><td class='docblock-short'><p>Types and traits for the allocation of channels.</p>
+</td></tr><tr class='module-item'><td><a class="mod" href="initialize/index.html" title='timely_communication::initialize mod'>initialize</a></td><td class='docblock-short'><p>Initialization logic for a generic instance of the <code>Allocate</code> channel allocation trait.</p>
+</td></tr><tr class='module-item'><td><a class="mod" href="logging/index.html" title='timely_communication::logging mod'>logging</a></td><td class='docblock-short'><p>Configuration and events for communication logging.</p>
+</td></tr><tr class='module-item'><td><a class="mod" href="message/index.html" title='timely_communication::message mod'>message</a></td><td class='docblock-short'><p>Types wrapping typed data.</p>
+</td></tr><tr class='module-item'><td><a class="mod" href="networking/index.html" title='timely_communication::networking mod'>networking</a></td><td class='docblock-short'><p>Networking code for sending and receiving fixed size <code>Vec&lt;u8&gt;</code> between machines.</p>
+</td></tr></table><h2 id='traits' class='section-header'><a href="#traits">Traits</a></h2>
+<table><tr class='module-item'><td><a class="trait" href="trait.Data.html" title='timely_communication::Data trait'>Data</a></td><td class='docblock-short'><p>A composite trait for types that may be used with channels.</p>
+</td></tr><tr class='module-item'><td><a class="trait" href="trait.Pull.html" title='timely_communication::Pull trait'>Pull</a></td><td class='docblock-short'><p>Pulling elements of type <code>T</code>.</p>
+</td></tr><tr class='module-item'><td><a class="trait" href="trait.Push.html" title='timely_communication::Push trait'>Push</a></td><td class='docblock-short'><p>Pushing elements of type <code>T</code>.</p>
+</td></tr></table></section><section id="search" class="content hidden"></section><section class="footer"></section><aside id="help" class="hidden"><div><h1 class="hidden">Help</h1><div class="shortcuts"><h2>Keyboard Shortcuts</h2><dl><dt><kbd>?</kbd></dt><dd>Show this help dialog</dd><dt><kbd>S</kbd></dt><dd>Focus the search field</dd><dt><kbd>↑</kbd></dt><dd>Move up in search results</dd><dt><kbd>↓</kbd></dt><dd>Move down in search results</dd><dt><kbd>↹</kbd></dt><dd>Switch tab</dd><dt><kbd>&#9166;</kbd></dt><dd>Go to active search result</dd><dt><kbd>+</kbd></dt><dd>Expand all sections</dd><dt><kbd>-</kbd></dt><dd>Collapse all sections</dd></dl></div><div class="infos"><h2>Search Tricks</h2><p>Prefix searches with a type followed by a colon (e.g., <code>fn:</code>) to restrict the search to a given type.</p><p>Accepted types are: <code>fn</code>, <code>mod</code>, <code>struct</code>, <code>enum</code>, <code>trait</code>, <code>type</code>, <code>macro</code>, and <code>const</code>.</p><p>Search functions by type signature (e.g., <code>vec -> usize</code> or <code>* -> vec</code>)</p><p>Search multiple things at once by splitting your query with comma (e.g., <code>str,u8</code> or <code>String,struct:Vec,test</code>)</p></div></div></aside><script>window.rootPath = "../";window.currentCrate = "timely_communication";</script><script src="../aliases.js"></script><script src="../main.js"></script><script defer src="../search-index.js"></script></body></html>

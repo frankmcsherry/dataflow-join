@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["Enter","Extension trait to move a `Stream` into a child of its current `Scope`."],["EnterAt","Extension trait to move a `Stream` into a child of its current `Scope` setting the timestamp for each element."],["Leave","Extension trait to move a `Stream` to the parent of its current `Scope`."]]});

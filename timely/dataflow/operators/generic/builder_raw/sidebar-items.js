@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["OperatorBuilder","Builds operators with generic shape."],["OperatorShape","Contains type-free information about the operator properties."]]});

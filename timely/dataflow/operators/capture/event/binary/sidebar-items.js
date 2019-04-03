@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["EventReader","A Wrapper for `R: Read` implementing `EventIterator<T, D>`."],["EventWriter","A wrapper for `W: Write` implementing `EventPusher<T, D>`."]]});

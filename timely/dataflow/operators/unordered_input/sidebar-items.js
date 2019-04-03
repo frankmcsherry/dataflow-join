@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["UnorderedHandle","A handle to an input `Stream`, used to introduce data to a timely dataflow computation."]],"trait":[["UnorderedInput","Create a new `Stream` and `Handle` through which to supply input."]]});

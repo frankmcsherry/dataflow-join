@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Barrier","A re-usable barrier synchronization mechanism."]]});

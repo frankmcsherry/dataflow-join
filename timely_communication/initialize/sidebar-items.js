@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Configuration","Possible configurations for the communication infrastructure."]],"fn":[["initialize","Initializes communication and executes a distributed computation."],["initialize_from","Initializes computation and runs a distributed computation."]],"struct":[["WorkerGuards","Maintains `JoinHandle`s for worker threads."]]});

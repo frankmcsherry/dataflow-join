@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["recv_loop","Repeatedly reads from a TcpStream and carves out messages."],["send_loop","Repeatedly sends messages into a TcpStream."]]});

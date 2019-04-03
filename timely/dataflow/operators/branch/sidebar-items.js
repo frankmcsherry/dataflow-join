@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["Branch","Extension trait for `Stream`."],["BranchWhen","Extension trait for `Stream`."]]});

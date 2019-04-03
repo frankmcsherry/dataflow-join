@@ -1,0 +1,205 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source to the Rust file `/home/travis/.cargo/registry/src/github.com-1ecc6299db9ec823/timely-0.7.0/src/progress/operate.rs`."><meta name="keywords" content="rust, rustlang, rust-lang"><title>operate.rs.html -- source</title><link rel="stylesheet" type="text/css" href="../../../normalize.css"><link rel="stylesheet" type="text/css" href="../../../rustdoc.css" id="mainThemeStyle"><link rel="stylesheet" type="text/css" href="../../../dark.css"><link rel="stylesheet" type="text/css" href="../../../light.css" id="themeStyle"><script src="../../../storage.js"></script><noscript><link rel="stylesheet" href="../../../noscript.css"></noscript><style type="text/css">#crate-search{background-image:url("../../../down-arrow.svg");}</style></head><body class="rustdoc source"><!--[if lte IE 8]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="sidebar-menu">&#9776;</div></nav><div class="theme-picker"><button id="theme-picker" aria-label="Pick another theme!"><img src="../../../brush.svg" width="18" alt="Pick another theme!"></button><div id="theme-choices"></div></div><script src="../../../theme.js"></script><nav class="sub"><form class="search-form js-only"><div class="search-container"><div><select id="crate-search"><option value="All crates">All crates</option></select><input class="search-input" name="search" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"></div><a id="settings-menu" href="../../../settings.html"><img src="../../../wheel.svg" width="18" alt="Change settings"></a></div></form></nav><section id="main" class="content"><pre class="line-numbers"><span id="1">  1</span>
+<span id="2">  2</span>
+<span id="3">  3</span>
+<span id="4">  4</span>
+<span id="5">  5</span>
+<span id="6">  6</span>
+<span id="7">  7</span>
+<span id="8">  8</span>
+<span id="9">  9</span>
+<span id="10"> 10</span>
+<span id="11"> 11</span>
+<span id="12"> 12</span>
+<span id="13"> 13</span>
+<span id="14"> 14</span>
+<span id="15"> 15</span>
+<span id="16"> 16</span>
+<span id="17"> 17</span>
+<span id="18"> 18</span>
+<span id="19"> 19</span>
+<span id="20"> 20</span>
+<span id="21"> 21</span>
+<span id="22"> 22</span>
+<span id="23"> 23</span>
+<span id="24"> 24</span>
+<span id="25"> 25</span>
+<span id="26"> 26</span>
+<span id="27"> 27</span>
+<span id="28"> 28</span>
+<span id="29"> 29</span>
+<span id="30"> 30</span>
+<span id="31"> 31</span>
+<span id="32"> 32</span>
+<span id="33"> 33</span>
+<span id="34"> 34</span>
+<span id="35"> 35</span>
+<span id="36"> 36</span>
+<span id="37"> 37</span>
+<span id="38"> 38</span>
+<span id="39"> 39</span>
+<span id="40"> 40</span>
+<span id="41"> 41</span>
+<span id="42"> 42</span>
+<span id="43"> 43</span>
+<span id="44"> 44</span>
+<span id="45"> 45</span>
+<span id="46"> 46</span>
+<span id="47"> 47</span>
+<span id="48"> 48</span>
+<span id="49"> 49</span>
+<span id="50"> 50</span>
+<span id="51"> 51</span>
+<span id="52"> 52</span>
+<span id="53"> 53</span>
+<span id="54"> 54</span>
+<span id="55"> 55</span>
+<span id="56"> 56</span>
+<span id="57"> 57</span>
+<span id="58"> 58</span>
+<span id="59"> 59</span>
+<span id="60"> 60</span>
+<span id="61"> 61</span>
+<span id="62"> 62</span>
+<span id="63"> 63</span>
+<span id="64"> 64</span>
+<span id="65"> 65</span>
+<span id="66"> 66</span>
+<span id="67"> 67</span>
+<span id="68"> 68</span>
+<span id="69"> 69</span>
+<span id="70"> 70</span>
+<span id="71"> 71</span>
+<span id="72"> 72</span>
+<span id="73"> 73</span>
+<span id="74"> 74</span>
+<span id="75"> 75</span>
+<span id="76"> 76</span>
+<span id="77"> 77</span>
+<span id="78"> 78</span>
+<span id="79"> 79</span>
+<span id="80"> 80</span>
+<span id="81"> 81</span>
+<span id="82"> 82</span>
+<span id="83"> 83</span>
+<span id="84"> 84</span>
+<span id="85"> 85</span>
+<span id="86"> 86</span>
+<span id="87"> 87</span>
+<span id="88"> 88</span>
+<span id="89"> 89</span>
+<span id="90"> 90</span>
+<span id="91"> 91</span>
+<span id="92"> 92</span>
+<span id="93"> 93</span>
+<span id="94"> 94</span>
+<span id="95"> 95</span>
+<span id="96"> 96</span>
+<span id="97"> 97</span>
+<span id="98"> 98</span>
+<span id="99"> 99</span>
+<span id="100">100</span>
+<span id="101">101</span>
+</pre><div class="example-wrap"><pre class="rust ">
+<span class="doccomment">//! Methods which describe an operators topology, and the progress it makes.</span>
+
+<span class="kw">use</span> <span class="ident">std</span>::<span class="ident">default</span>::<span class="ident">Default</span>;
+
+<span class="kw">use</span> <span class="ident">progress</span>::{<span class="ident">Timestamp</span>, <span class="ident">ChangeBatch</span>, <span class="ident">Antichain</span>};
+
+
+<span class="doccomment">/// Methods for describing an operators topology, and the progress it makes.</span>
+<span class="kw">pub</span> <span class="kw">trait</span> <span class="ident">Operate</span><span class="op">&lt;</span><span class="ident">T</span>: <span class="ident">Timestamp</span><span class="op">&gt;</span> {
+
+    <span class="doccomment">/// Indicates if the operator is strictly local to this worker.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// A parent scope must understand whether the progress information returned by the worker</span>
+    <span class="doccomment">/// reflects only this worker&#39;s progress, so that it knows whether to send and receive the</span>
+    <span class="doccomment">/// corresponding progress messages to its peers. If the operator is strictly local, it must</span>
+    <span class="doccomment">/// exchange this information, whereas if the operator is itself implemented by the same set</span>
+    <span class="doccomment">/// of workers, the parent scope understands that progress information already reflects the</span>
+    <span class="doccomment">/// aggregate information among the workers.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// This is a coarse approximation to refined worker sets. In a future better world, operators</span>
+    <span class="doccomment">/// would explain how their implementations are partitioned, so that a parent scope knows what</span>
+    <span class="doccomment">/// progress information to exchange with which peers. Right now the two choices are either</span>
+    <span class="doccomment">/// &quot;all&quot; or &quot;none&quot;, but it could be more detailed. In the more detailed case, this method</span>
+    <span class="doccomment">/// should / could return a pair (index, peers), indicating the group id of the worker out of</span>
+    <span class="doccomment">/// how many groups. This becomes complicated, as a full all-to-all exchange would result in</span>
+    <span class="doccomment">/// multiple copies of the same progress messages (but aggregated variously) arriving at</span>
+    <span class="doccomment">/// arbitrary times.</span>
+    <span class="kw">fn</span> <span class="ident">local</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) <span class="op">-&gt;</span> <span class="ident">bool</span> { <span class="bool-val">true</span> }
+
+    <span class="doccomment">/// The number of inputs.</span>
+    <span class="kw">fn</span> <span class="ident">inputs</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) <span class="op">-&gt;</span> <span class="ident">usize</span>;
+    <span class="doccomment">/// The number of outputs.</span>
+    <span class="kw">fn</span> <span class="ident">outputs</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) <span class="op">-&gt;</span> <span class="ident">usize</span>;
+
+    <span class="doccomment">/// Fetches summary information about internal structure of the operator.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Each operator must summarize its internal structure by a map from pairs `(input, output)`</span>
+    <span class="doccomment">/// to an antichain of timestamp summaries, indicating how a timestamp on any of its inputs may</span>
+    <span class="doccomment">/// be transformed to timestamps on any of its outputs.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Each operator must also indicate whether it initially holds any capabilities on any of its</span>
+    <span class="doccomment">/// outputs, so that the parent operator can properly initialize its progress information.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// The default behavior is to indicate that timestamps on any input can emerge unchanged on</span>
+    <span class="doccomment">/// any output, and no initial capabilities are held.</span>
+    <span class="kw">fn</span> <span class="ident">get_internal_summary</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="self">self</span>) <span class="op">-&gt;</span> (<span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">Antichain</span><span class="op">&lt;</span><span class="ident">T</span>::<span class="ident">Summary</span><span class="op">&gt;&gt;</span><span class="op">&gt;</span>, <span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;&gt;</span>) {
+        (<span class="macro">vec</span><span class="macro">!</span>[<span class="macro">vec</span><span class="macro">!</span>[<span class="ident">Antichain</span>::<span class="ident">from_elem</span>(<span class="ident">Default</span>::<span class="ident">default</span>()); <span class="self">self</span>.<span class="ident">outputs</span>()]; <span class="self">self</span>.<span class="ident">inputs</span>()],
+         <span class="macro">vec</span><span class="macro">!</span>[<span class="ident">ChangeBatch</span>::<span class="ident">new</span>(); <span class="self">self</span>.<span class="ident">outputs</span>()])
+    }
+
+    <span class="doccomment">/// Presents summary information about the external structure around the operator.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Each operator exists in the context of a parent scope, and the edges and other operators it</span>
+    <span class="doccomment">/// hosts represent paths messages may take from this operators outputs back to its inputs. For</span>
+    <span class="doccomment">/// an operator to correctly understand the implications of local progress statements, it must</span>
+    <span class="doccomment">/// understand how messages it produces may eventually return to its inputs.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// The parent scope must also provide initial capabilities for each of the inputs, reflecting</span>
+    <span class="doccomment">/// work elsewhere in the timely computation. Note: it is not clear whether the parent must not</span>
+    <span class="doccomment">/// include capabilities expressed by the operator itself. It seems possible to exclude such</span>
+    <span class="doccomment">/// capabilities, if it would help the operator, but the operator should not yet rely on any</span>
+    <span class="doccomment">/// specific behavior.</span>
+    <span class="kw">fn</span> <span class="ident">set_external_summary</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="self">self</span>, <span class="ident">_summaries</span>: <span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">Antichain</span><span class="op">&lt;</span><span class="ident">T</span>::<span class="ident">Summary</span><span class="op">&gt;&gt;</span><span class="op">&gt;</span>, <span class="ident">_frontier</span>: <span class="kw-2">&amp;</span><span class="kw-2">mut</span> [<span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;</span>]) { }
+
+    <span class="doccomment">/// Reports a summary of progress statements external to the operator and its peer group.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// This report summarizes *all* of the external world, including updates issued by the operator</span>
+    <span class="doccomment">/// itself. This is important, and means that there is an ordering constraint that needs to be</span>
+    <span class="doccomment">/// enforced by the operator: before reporting any summarized progress to its parent, a child</span>
+    <span class="doccomment">/// must install the non-summarized parts (internal messages, capabilities) locally. Otherwise,</span>
+    <span class="doccomment">/// the child may learn about external &quot;progress&quot; corresponding to its own actions, and without</span>
+    <span class="doccomment">/// noting the consequences of those actions, will be in a bit of a pickle.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Note: Callee is expected to consume the contents of _external to indicate acknowledgement.</span>
+    <span class="kw">fn</span> <span class="ident">push_external_progress</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="self">self</span>, <span class="ident">external</span>: <span class="kw-2">&amp;</span><span class="kw-2">mut</span> [<span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;</span>]) {
+        <span class="comment">// default implementation just drains the external updates</span>
+        <span class="kw">for</span> <span class="ident">updates</span> <span class="kw">in</span> <span class="ident">external</span>.<span class="ident">iter_mut</span>() {
+            <span class="ident">updates</span>.<span class="ident">clear</span>();
+        }
+    }
+
+    <span class="doccomment">/// Retrieves a summary of progress statements internal to the operator.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Returns a bool indicating if there is any unreported work remaining (e.g. work that doesn&#39;t</span>
+    <span class="doccomment">/// project on an output).</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// Note: not &quot;internal to the operator and its peer group&quot;. The operator instance should only</span>
+    <span class="doccomment">/// report progress performed by its own instance. The parent scope will figure out what to do</span>
+    <span class="doccomment">/// with this information (mostly likely exchange it with its peers). There does seem to be the</span>
+    <span class="doccomment">/// opportunity to optimize this, but it may complicate the life of the parent to know which of</span>
+    <span class="doccomment">/// its children are reporting partial information and which are complete.</span>
+    <span class="kw">fn</span> <span class="ident">pull_internal_progress</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="self">self</span>, <span class="ident">consumed</span>: <span class="kw-2">&amp;</span><span class="kw-2">mut</span> [<span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;</span>],          <span class="comment">// to populate</span>
+                                         <span class="ident">internal</span>: <span class="kw-2">&amp;</span><span class="kw-2">mut</span> [<span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;</span>],          <span class="comment">// to populate</span>
+                                         <span class="ident">produced</span>: <span class="kw-2">&amp;</span><span class="kw-2">mut</span> [<span class="ident">ChangeBatch</span><span class="op">&lt;</span><span class="ident">T</span><span class="op">&gt;</span>]) <span class="op">-&gt;</span> <span class="ident">bool</span>; <span class="comment">// to populate</span>
+
+    <span class="doccomment">/// A descriptive name for the operator</span>
+    <span class="kw">fn</span> <span class="ident">name</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) <span class="op">-&gt;</span> <span class="ident">String</span>;
+
+    <span class="doccomment">/// Indicates of whether the operator requires `push_external_progress` information or not.</span>
+    <span class="kw">fn</span> <span class="ident">notify_me</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) <span class="op">-&gt;</span> <span class="ident">bool</span> { <span class="bool-val">true</span> }
+}
+</pre></div>
+</section><section id="search" class="content hidden"></section><section class="footer"></section><aside id="help" class="hidden"><div><h1 class="hidden">Help</h1><div class="shortcuts"><h2>Keyboard Shortcuts</h2><dl><dt><kbd>?</kbd></dt><dd>Show this help dialog</dd><dt><kbd>S</kbd></dt><dd>Focus the search field</dd><dt><kbd>↑</kbd></dt><dd>Move up in search results</dd><dt><kbd>↓</kbd></dt><dd>Move down in search results</dd><dt><kbd>↹</kbd></dt><dd>Switch tab</dd><dt><kbd>&#9166;</kbd></dt><dd>Go to active search result</dd><dt><kbd>+</kbd></dt><dd>Expand all sections</dd><dt><kbd>-</kbd></dt><dd>Collapse all sections</dd></dl></div><div class="infos"><h2>Search Tricks</h2><p>Prefix searches with a type followed by a colon (e.g., <code>fn:</code>) to restrict the search to a given type.</p><p>Accepted types are: <code>fn</code>, <code>mod</code>, <code>struct</code>, <code>enum</code>, <code>trait</code>, <code>type</code>, <code>macro</code>, and <code>const</code>.</p><p>Search functions by type signature (e.g., <code>vec -> usize</code> or <code>* -> vec</code>)</p><p>Search multiple things at once by splitting your query with comma (e.g., <code>str,u8</code> or <code>String,struct:Vec,test</code>)</p></div></div></aside><script>window.rootPath = "../../../";window.currentCrate = "timely";</script><script src="../../../aliases.js"></script><script src="../../../main.js"></script><script src="../../../source-script.js"></script><script src="../../../source-files.js"></script><script defer src="../../../search-index.js"></script></body></html>

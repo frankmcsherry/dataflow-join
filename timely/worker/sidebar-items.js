@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Worker","A `Worker` is the entry point to a timely dataflow computation. It wraps a `Allocate`, and has a list of dataflows that it manages."]],"trait":[["AsWorker","Methods provided by the root Worker."]]});

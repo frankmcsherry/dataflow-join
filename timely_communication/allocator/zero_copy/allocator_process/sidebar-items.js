@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["ProcessAllocator","A serializing allocator for inter-thread intra-process communication."],["ProcessBuilder","Builds an instance of a ProcessAllocator."]]});

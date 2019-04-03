@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Event","Data and progress events of the captured stream."]],"mod":[["binary","A binary event pusher and iterator."],["link","A linked-list event pusher and iterator."]],"trait":[["EventIterator","Iterates over contained `Event<T, D>`."],["EventPusher","Receives `Event<T, D>` events."]]});

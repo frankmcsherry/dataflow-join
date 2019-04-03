@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Child","A `Child` wraps a `Subgraph` and a parent `G: Scope`. It manages the addition of `Operate`s to a subgraph, and the connection of edges between them."]]});

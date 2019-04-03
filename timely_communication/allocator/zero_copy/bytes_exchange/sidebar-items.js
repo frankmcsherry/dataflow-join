@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["MergeQueue","Who knows."],["SendEndpoint","A `BytesPush` wrapper which stages writes."],["Signal","A signal appropriate to wake a single thread."]],"trait":[["BytesPull","A source for `Bytes`."],["BytesPush","A target for `Bytes`."]]});

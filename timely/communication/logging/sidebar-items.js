@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["CommunicationEvent","Various communication events."]],"struct":[["CommunicationSetup","Configuration information about a communication thread."],["MessageEvent","An observed message."],["StateEvent","Starting or stopping communication threads."]]});

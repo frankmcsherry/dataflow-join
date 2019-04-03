@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["new_vector","Creates a vector of builders, sharing appropriate state."]],"struct":[["TcpAllocator","A TCP-based allocator for inter-process communication."],["TcpBuilder","Builds an instance of a TcpAllocator."]]});

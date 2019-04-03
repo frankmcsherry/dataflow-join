@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Puller","An adapter from which one can pull elements of type `T`."],["PullerInner","An adapter from which one can pull elements of type `T`."],["Pusher","An adapter into which one may push elements of type `T`."]]});
